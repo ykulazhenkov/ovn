@@ -1206,3 +1206,21 @@ AC_DEFUN([OVS_CHECK_LINUX_HOST],
         [ovs_cv_linux=true],
         [ovs_cv_linux=false])])
    AM_CONDITIONAL([LINUX], [$ovs_cv_linux])])
+
+dnl OVN_CHECK_OVS
+dnl
+dnl Check for OVS sources
+AC_DEFUN([OVN_CHECK_OVS], [
+  AC_ARG_WITH([ovs],
+              [AC_HELP_STRING([--with-ovs=/path/to/ovs],
+                              [Specify the OVS src directory])])
+
+  if test X"$with_ovs" != X; then
+    OVSDIR=$with_ovs
+  else
+    AC_ERROR([OVS source dir path needs to be specified])
+  fi
+  OVSDIR=`eval echo "$OVSDIR"`
+  AC_MSG_RESULT([$OVSDIR])
+  AC_SUBST(OVSDIR)
+])
