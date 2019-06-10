@@ -10,7 +10,18 @@ TARGET="x86_64-native-linuxapp-gcc"
 
 function configure_ovs()
 {
+    git clone https://github.com/openvswitch/ovs.git ovs_src
+    pushd ovs_src
     ./boot.sh && ./configure $* || { cat config.log; exit 1; }
+    make -j4
+    popd
+}
+
+function configure_ovn()
+{
+    configure_ovs
+    ./boot.sh && ./configure --with-ovs-source=$PWD/ovs_src $* || \
+    { cat config.log; exit 1; }
 }
 
 OPTS="$EXTRA_OPTS $*"
@@ -28,16 +39,29 @@ fi
 if [ "$TESTSUITE" ]; then
     # 'distcheck' will reconfigure with required options.
     # Now we only need to prepare the Makefile without sparse-wrapped CC.
-    configure_ovs
+    configure_ovn
 
-    export DISTCHECK_CONFIGURE_FLAGS="$OPTS"
+    export DISTCHECK_CONFIGURE_FLAGS="$OPTS --with-ovs-source=$PWD/ovs_src"
     if ! make distcheck -j4 TESTSUITEFLAGS="-j4 -k ovn" RECHECK=yes; then
         # testsuite.log is necessary for debugging.
-        cat */_build/tests/testsuite.log
+        echo "******** NUMS : echoing 168 result **********"
+        pwd
+        ls -l
+        cat ovn-2.12.90/_build/sub/tests/testsuite.dir/168/testsuite.log
+        echo "******* NUMS : echoing 169 result ***********"
+        cat ovn-2.12.90/_build/sub/tests/testsuite.dir/169/testsuite.log
+        echo "******* NUMS 3333 : echoing 170 result **********"
+        cat ovn-2.12.90/_build/sub/tests/testsuite.dir/170/testsuite.log
+        echo "*** NUMS 444 : echoing 171 result *********"
+        cat ovn-2.12.90/_build/sub/tests/testsuite.dir/171/testsuite.log
+        echo "**** NUMS 5555 : echoing 178 result *********"
+        cat ovn-2.12.90/_build/sub/tests/testsuite.dir/178/testsuite.log
+        echo "***********SIDDIQUE **************"
+        cat ovn-2.12.90/_build/sub/tests/testsuite.log
         exit 1
     fi
 else
-    configure_ovs $OPTS
+    configure_ovn $OPTS
     make selinux-policy
 
     make -j4
