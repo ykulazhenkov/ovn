@@ -8,9 +8,21 @@ SPARSE_FLAGS=""
 EXTRA_OPTS=""
 TARGET="x86_64-native-linuxapp-gcc"
 
+ovs_dir=$PWD/ovs_src
+
 function configure_ovs()
 {
+    git clone https://github.com/openvswitch/ovs.git $ovs_dir
+    pushd $ovs_dir
     ./boot.sh && ./configure $* || { cat config.log; exit 1; }
+    make -j4
+    popd
+}
+
+function configure_ovn()
+{
+    configure_ovs
+    ./boot.sh && ./configure --with-ovs-source=$ovs_dir $* || { cat config.log; exit 1; }
 }
 
 OPTS="$EXTRA_OPTS $*"
@@ -28,7 +40,7 @@ fi
 if [ "$TESTSUITE" ]; then
     # 'distcheck' will reconfigure with required options.
     # Now we only need to prepare the Makefile without sparse-wrapped CC.
-    configure_ovs
+    configure_ovn
 
     export DISTCHECK_CONFIGURE_FLAGS="$OPTS"
     if ! make distcheck -j4 TESTSUITEFLAGS="-j4 -k ovn" RECHECK=yes; then
@@ -37,7 +49,7 @@ if [ "$TESTSUITE" ]; then
         exit 1
     fi
 else
-    configure_ovs $OPTS
+    configure_ovn $OPTS
     make selinux-policy
 
     make -j4

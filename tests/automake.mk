@@ -51,7 +51,7 @@ SYSTEM_KMOD_TESTSUITE = $(srcdir)/tests/system-kmod-testsuite
 SYSTEM_USERSPACE_TESTSUITE = $(srcdir)/tests/system-userspace-testsuite
 DISTCLEANFILES += tests/atconfig tests/atlocal
 
-AUTOTEST_PATH = ovs/utilities:ovs/vswitchd:ovs/ovsdb:ovs/vtep:tests:$(PTHREAD_WIN32_DIR_DLL):$(SSL_DIR):controller-vtep:northd:utilities:controller
+AUTOTEST_PATH = $(ovs_builddir)/utilities:$(ovs_builddir)/vswitchd:$(ovs_builddir)/ovsdb:$(ovs_builddir)/vtep:tests:$(PTHREAD_WIN32_DIR_DLL):$(SSL_DIR):controller-vtep:northd:utilities:controller
 
 check-local:
 	set $(SHELL) '$(TESTSUITE)' -C tests AUTOTEST_PATH=$(AUTOTEST_PATH); \

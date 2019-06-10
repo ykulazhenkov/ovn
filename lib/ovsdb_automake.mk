@@ -1,10 +1,10 @@
 # ovsdb-idlc
-noinst_SCRIPTS += ovs/ovsdb/ovsdb-idlc
-EXTRA_DIST += ovs/ovsdb/ovsdb-idlc.in
-MAN_ROOTS += ovs/ovsdb/ovsdb-idlc.1
-CLEANFILES += ovs/ovsdb/ovsdb-idlc
+noinst_SCRIPTS += ${OVSDIR}/ovsdb/ovsdb-idlc
+EXTRA_DIST += ${OVSDIR}/ovsdb/ovsdb-idlc.in
+MAN_ROOTS += ${OVSDIR}/ovsdb/ovsdb-idlc.1
+CLEANFILES += ${OVSDIR}/ovsdb/ovsdb-idlc
 SUFFIXES += .ovsidl .ovsschema
-OVSDB_IDLC = $(run_python) $(srcdir)/ovs/ovsdb/ovsdb-idlc.in
+OVSDB_IDLC = $(run_python) ${OVSDIR}/ovsdb/ovsdb-idlc.in
 .ovsidl.c:
 	$(AM_V_GEN)$(OVSDB_IDLC) c-idl-source $< > $@.tmp && mv $@.tmp $@
 .ovsidl.h:
@@ -21,5 +21,5 @@ CLEANFILES += $(OVSIDL_BUILT)
 # However, current versions of Automake seem to output all variable
 # assignments before any targets, so it doesn't seem to be a problem,
 # at least for now.
-$(OVSIDL_BUILT): ovs/ovsdb/ovsdb-idlc.in
+$(OVSIDL_BUILT): ${OVSDIR}/ovsdb/ovsdb-idlc.in
 
