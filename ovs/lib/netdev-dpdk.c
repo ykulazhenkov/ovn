@@ -47,7 +47,6 @@
 #include "dpif-netdev.h"
 #include "fatal-signal.h"
 #include "netdev-provider.h"
-#include "netdev-rte-offloads.h"
 #include "netdev-vport.h"
 #include "odp-util.h"
 #include "openvswitch/dynamic-string.h"
@@ -1395,8 +1394,11 @@ netdev_dpdk_destruct(struct netdev *netdev)
          * device are closed.
          */
         if (!remove_on_close || !netdev_dpdk_get_num_ports(rte_dev)) {
-            if (rte_dev_remove(rte_dev) < 0) {
-                VLOG_ERR("Device '%s' can not be detached", dev->devargs);
+            int ret = rte_dev_remove(rte_dev);
+
+            if (ret < 0) {
+                VLOG_ERR("Device '%s' can not be detached: %s.",
+                         dev->devargs, rte_strerror(-ret));
             } else {
                 /* Device was closed and detached. */
                 VLOG_INFO("Device '%s' has been removed and detached",
@@ -4147,6 +4149,11 @@ netdev_dpdk_vhost_client_reconfigure(struct netdev *netdev)
             vhost_flags |= RTE_VHOST_USER_IOMMU_SUPPORT;
         }
 
+        /* Enable POSTCOPY support, if explicitly requested. */
+        if (dpdk_vhost_postcopy_enabled()) {
+            vhost_flags |= RTE_VHOST_USER_POSTCOPY_SUPPORT;
+        }
+
         zc_enabled = dev->vhost_driver_flags
                      & RTE_VHOST_USER_DEQUEUE_ZERO_COPY;
         /* Enable zero copy flag, if requested */
@@ -4202,6 +4209,27 @@ unlock:
     ovs_mutex_unlock(&dev->mutex);
 
     return err;
+}
+
+bool
+netdev_dpdk_flow_api_supported(struct netdev *netdev)
+{
+    struct netdev_dpdk *dev;
+    bool ret = false;
+
+    if (!is_dpdk_class(netdev->netdev_class)) {
+        goto out;
+    }
+
+    dev = netdev_dpdk_cast(netdev);
+    ovs_mutex_lock(&dev->mutex);
+    if (dev->type == DPDK_DEV_ETH) {
+        /* TODO: Check if we able to offload some minimal flow. */
+        ret = true;
+    }
+    ovs_mutex_unlock(&dev->mutex);
+out:
+    return ret;
 }
 
 int
@@ -4268,8 +4296,7 @@ netdev_dpdk_rte_flow_create(struct netdev *netdev,
     .get_features = netdev_dpdk_get_features,           \
     .get_status = netdev_dpdk_get_status,               \
     .reconfigure = netdev_dpdk_reconfigure,             \
-    .rxq_recv = netdev_dpdk_rxq_recv,                   \
-    DPDK_FLOW_OFFLOAD_API
+    .rxq_recv = netdev_dpdk_rxq_recv
 
 static const struct netdev_class dpdk_class = {
     .type = "dpdk",

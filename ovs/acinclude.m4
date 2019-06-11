@@ -1,6 +1,6 @@
 # -*- autoconf -*-
 
-# Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017 Nicira, Inc.
+# Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2019 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -151,10 +151,10 @@ AC_DEFUN([OVS_CHECK_LINUX], [
     AC_MSG_RESULT([$kversion])
 
     if test "$version" -ge 4; then
-       if test "$version" = 4 && test "$patchlevel" -le 18; then
+       if test "$version" = 4 && test "$patchlevel" -le 20; then
           : # Linux 4.x
        else
-          AC_ERROR([Linux kernel in $KBUILD is version $kversion, but version newer than 4.18.x is not supported (please refer to the FAQ for advice)])
+          AC_ERROR([Linux kernel in $KBUILD is version $kversion, but version newer than 4.20.x is not supported (please refer to the FAQ for advice)])
        fi
     elif test "$version" = 3 && test "$patchlevel" -ge 10; then
        : # Linux 3.x
@@ -210,6 +210,21 @@ AC_DEFUN([OVS_CHECK_LINUX_TC], [
     ])],
     [AC_DEFINE([HAVE_TCA_SKBEDIT_FLAGS], [1],
                [Define to 1 if TCA_SKBEDIT_FLAGS is available.])])
+])
+
+dnl OVS_CHECK_LINUX_SCTP_CT
+dnl
+dnl Checks for kernels which need additional SCTP state
+AC_DEFUN([OVS_CHECK_LINUX_SCTP_CT], [
+  AC_COMPILE_IFELSE([
+    AC_LANG_PROGRAM([#include <linux/netfilter/nfnetlink.h>
+#include <linux/netfilter/nfnetlink_conntrack.h>
+#include <linux/netfilter/nf_conntrack_common.h>
+#include <linux/netfilter/nf_conntrack_sctp.h>], [
+        int x = SCTP_CONNTRACK_HEARTBEAT_SENT;
+    ])],
+    [AC_DEFINE([HAVE_SCTP_CONNTRACK_HEARTBEATS], [1],
+               [Define to 1 if SCTP_CONNTRACK_HEARTBEAT_SENT is available.])])
 ])
 
 dnl OVS_FIND_DEPENDENCY(FUNCTION, SEARCH_LIBS, NAME_TO_PRINT)
@@ -603,6 +618,8 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
                         [ndo_change_mtu], [OVS_DEFINE([HAVE_RHEL7_MAX_MTU])])
 
   OVS_GREP_IFELSE([$KSRC/include/linux/netfilter.h], [nf_hook_state])
+  OVS_FIND_FIELD_IFELSE([$KSRC/include/linux/netfilter.h], [nf_hook_state],
+                        [struct net ], [OVS_DEFINE([HAVE_NF_HOOK_STATE_NET])])
   OVS_GREP_IFELSE([$KSRC/include/linux/netfilter.h], [nf_register_net_hook])
   OVS_GREP_IFELSE([$KSRC/include/linux/netfilter.h], [nf_hookfn.*nf_hook_ops],
                   [OVS_DEFINE([HAVE_NF_HOOKFN_ARG_OPS])])
@@ -920,10 +937,23 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
                         [OVS_DEFINE([HAVE_INET_FRAGS_RND])])
   OVS_GREP_IFELSE([$KSRC/include/linux/overflow.h], [__LINUX_OVERFLOW_H],
                   [OVS_DEFINE([HAVE_OVERFLOW_H])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/overflow.h], [struct_size],
+                  [OVS_DEFINE([HAVE_STRUCT_SIZE])])
   OVS_GREP_IFELSE([$KSRC/include/linux/mm.h], [kvmalloc_array],
                   [OVS_DEFINE([HAVE_KVMALLOC_ARRAY])])
   OVS_GREP_IFELSE([$KSRC/include/linux/mm.h], [kvmalloc_node],
                   [OVS_DEFINE([HAVE_KVMALLOC_NODE])])
+  OVS_GREP_IFELSE([$KSRC/include/net/netfilter/nf_conntrack_l3proto.h],
+                  [nf_conntrack_l3proto],
+                  [OVS_DEFINE([HAVE_NF_CONNTRACK_L3PROATO_H])])
+  OVS_FIND_PARAM_IFELSE([$KSRC/include/net/netfilter/nf_conntrack_core.h],
+                        [nf_conntrack_in], [nf_hook_state],
+                        [OVS_DEFINE([HAVE_NF_CONNTRACK_IN_TAKES_NF_HOOK_STATE])])
+  OVS_GREP_IFELSE([$KSRC/include/net/ipv6_frag.h], [IP6_DEFRAG_CONNTRACK_IN],
+                  [OVS_DEFINE([HAVE_IPV6_FRAG_H])])
+  OVS_FIND_PARAM_IFELSE([$KSRC/include/net/netfilter/nf_conntrack_helper.h],
+                        [nf_ct_helper_ext_add], [nf_conntrack_helper],
+                        [OVS_DEFINE([HAVE_NF_CT_HELPER_EXT_ADD_TAKES_HELPER])])
 
   if cmp -s datapath/linux/kcompat.h.new \
             datapath/linux/kcompat.h >/dev/null 2>&1; then
@@ -1107,9 +1137,19 @@ AC_DEFUN([OVS_CHECK_SPARSE_TARGET],
        [x86_64-*], [ac_cv_sparse_target=x86_64],
        [ac_cv_sparse_target=other])])
    AS_CASE([$ac_cv_sparse_target],
-     [x86], [SPARSEFLAGS= CGCCFLAGS=-target=i86],
-     [x86_64], [SPARSEFLAGS=-m64 CGCCFLAGS=-target=x86_64],
+     [x86], [SPARSEFLAGS= CGCCFLAGS="-target=i86 -target=host_os_specs"],
+     [x86_64], [SPARSEFLAGS=-m64 CGCCFLAGS="-target=x86_64 -target=host_os_specs"],
      [SPARSEFLAGS= CGCCFLAGS=])
+
+   dnl Get the the default defines for vector instructions from compiler to
+   dnl allow "sparse" correctly check the same code that will be built.
+   dnl Required for checking DPDK headers.
+   AC_MSG_CHECKING([vector options for cgcc])
+   VECTOR=$($CC -dM -E - < /dev/null | grep -E "MMX|SSE|AVX" | \
+            cut -c 9- | sed 's/ /=/' | sed 's/^/-D/' | tr '\n' ' ')
+   AC_MSG_RESULT([$VECTOR])
+   CGCCFLAGS="$CGCCFLAGS $VECTOR"
+
    AC_SUBST([SPARSEFLAGS])
    AC_SUBST([CGCCFLAGS])])
 
