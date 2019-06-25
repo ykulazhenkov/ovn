@@ -16,7 +16,9 @@ lib_libovn_la_SOURCES = \
 	lib/ovn-l7.h \
 	lib/ovn-util.c \
 	lib/ovn-util.h \
-	lib/logical-fields.c
+	lib/logical-fields.c \
+	lib/inc-proc-eng.c \
+	lib/inc-proc-eng.h
 nodist_lib_libovn_la_SOURCES = \
 	lib/ovn-nb-idl.c \
 	lib/ovn-nb-idl.h \
