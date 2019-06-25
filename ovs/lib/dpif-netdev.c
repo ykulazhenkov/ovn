@@ -50,6 +50,7 @@
 #include "ipf.h"
 #include "latch.h"
 #include "netdev.h"
+#include "netdev-offload.h"
 #include "netdev-provider.h"
 #include "netdev-vport.h"
 #include "netlink.h"
@@ -381,7 +382,7 @@ struct dp_netdev {
 
     uint64_t last_tnl_conf_seq;
 
-    struct conntrack conntrack;
+    struct conntrack *conntrack;
     struct pmd_auto_lb pmd_alb;
 };
 
@@ -1520,7 +1521,7 @@ create_dp_netdev(const char *name, const struct dpif_class *class,
     dp->upcall_aux = NULL;
     dp->upcall_cb = NULL;
 
-    conntrack_init(&dp->conntrack);
+    dp->conntrack = conntrack_init();
 
     atomic_init(&dp->emc_insert_min, DEFAULT_EM_FLOW_INSERT_MIN);
     atomic_init(&dp->tx_flush_interval, DEFAULT_TX_FLUSH_INTERVAL);
@@ -1638,7 +1639,7 @@ dp_netdev_free(struct dp_netdev *dp)
     ovs_mutex_destroy(&dp->non_pmd_mutex);
     ovsthread_key_delete(dp->per_pmd_key);
 
-    conntrack_destroy(&dp->conntrack);
+    conntrack_destroy(dp->conntrack);
 
 
     seq_destroy(dp->reconfigure_seq);
@@ -2381,9 +2382,9 @@ dp_netdev_flow_offload_put(struct dp_flow_offload_item *offload)
 
     ovs_mutex_lock(&pmd->dp->port_mutex);
     port = dp_netdev_lookup_port(pmd->dp, in_port);
-    if (!port) {
+    if (!port || netdev_vport_is_vport_class(port->netdev->netdev_class)) {
         ovs_mutex_unlock(&pmd->dp->port_mutex);
-        return -1;
+        goto err_free;
     }
     ret = netdev_flow_put(port->netdev, &offload->match,
                           CONST_CAST(struct nlattr *, offload->actions),
@@ -2392,20 +2393,22 @@ dp_netdev_flow_offload_put(struct dp_flow_offload_item *offload)
     ovs_mutex_unlock(&pmd->dp->port_mutex);
 
     if (ret) {
-        if (!modification) {
-            flow_mark_free(mark);
-        } else {
-            mark_to_flow_disassociate(pmd, flow);
-        }
-        return -1;
+        goto err_free;
     }
 
     if (!modification) {
         megaflow_to_mark_associate(&flow->mega_ufid, mark);
         mark_to_flow_associate(mark, flow);
     }
-
     return 0;
+
+err_free:
+    if (!modification) {
+        flow_mark_free(mark);
+    } else {
+        mark_to_flow_disassociate(pmd, flow);
+    }
+    return -1;
 }
 
 static void *
@@ -5098,7 +5101,7 @@ pmd_rebalance_dry_run(struct dp_netdev *dp)
     uint64_t improvement = 0;
     uint32_t num_pmds;
     uint32_t *pmd_corelist;
-    struct rxq_poll *poll, *poll_next;
+    struct rxq_poll *poll;
     bool ret;
 
     num_pmds = cmap_count(&dp->poll_threads);
@@ -5124,13 +5127,14 @@ pmd_rebalance_dry_run(struct dp_netdev *dp)
         /* Estimate the cycles to cover all intervals. */
         total_cycles *= PMD_RXQ_INTERVAL_MAX;
 
-        HMAP_FOR_EACH_SAFE (poll, poll_next, node, &pmd->poll_list) {
-            uint64_t proc_cycles = 0;
+        ovs_mutex_lock(&pmd->port_mutex);
+        HMAP_FOR_EACH (poll, node, &pmd->poll_list) {
             for (unsigned i = 0; i < PMD_RXQ_INTERVAL_MAX; i++) {
-                proc_cycles += dp_netdev_rxq_get_intrvl_cycles(poll->rxq, i);
+                total_proc += dp_netdev_rxq_get_intrvl_cycles(poll->rxq, i);
             }
-            total_proc += proc_cycles;
         }
+        ovs_mutex_unlock(&pmd->port_mutex);
+
         if (total_proc) {
             curr_pmd_usage[num_pmds] = (total_proc * 100) / total_cycles;
         }
@@ -7213,7 +7217,7 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
             VLOG_WARN_RL(&rl, "NAT specified without commit.");
         }
 
-        conntrack_execute(&dp->conntrack, packets_, aux->flow->dl_type, force,
+        conntrack_execute(dp->conntrack, packets_, aux->flow->dl_type, force,
                           commit, zone, setmark, setlabel, aux->flow->tp_src,
                           aux->flow->tp_dst, helper, nat_action_info_ref,
                           pmd->ctx.now / 1000);
@@ -7277,9 +7281,9 @@ dpif_netdev_ct_dump_start(struct dpif *dpif, struct ct_dpif_dump_state **dump_,
 
     dump = xzalloc(sizeof *dump);
     dump->dp = dp;
-    dump->ct = &dp->conntrack;
+    dump->ct = dp->conntrack;
 
-    conntrack_dump_start(&dp->conntrack, &dump->dump, pzone, ptot_bkts);
+    conntrack_dump_start(dp->conntrack, &dump->dump, pzone, ptot_bkts);
 
     *dump_ = &dump->up;
 
@@ -7321,9 +7325,9 @@ dpif_netdev_ct_flush(struct dpif *dpif, const uint16_t *zone,
     struct dp_netdev *dp = get_dp_netdev(dpif);
 
     if (tuple) {
-        return conntrack_flush_tuple(&dp->conntrack, tuple, zone ? *zone : 0);
+        return conntrack_flush_tuple(dp->conntrack, tuple, zone ? *zone : 0);
     }
-    return conntrack_flush(&dp->conntrack, zone);
+    return conntrack_flush(dp->conntrack, zone);
 }
 
 static int
@@ -7331,7 +7335,7 @@ dpif_netdev_ct_set_maxconns(struct dpif *dpif, uint32_t maxconns)
 {
     struct dp_netdev *dp = get_dp_netdev(dpif);
 
-    return conntrack_set_maxconns(&dp->conntrack, maxconns);
+    return conntrack_set_maxconns(dp->conntrack, maxconns);
 }
 
 static int
@@ -7339,7 +7343,7 @@ dpif_netdev_ct_get_maxconns(struct dpif *dpif, uint32_t *maxconns)
 {
     struct dp_netdev *dp = get_dp_netdev(dpif);
 
-    return conntrack_get_maxconns(&dp->conntrack, maxconns);
+    return conntrack_get_maxconns(dp->conntrack, maxconns);
 }
 
 static int
@@ -7347,28 +7351,28 @@ dpif_netdev_ct_get_nconns(struct dpif *dpif, uint32_t *nconns)
 {
     struct dp_netdev *dp = get_dp_netdev(dpif);
 
-    return conntrack_get_nconns(&dp->conntrack, nconns);
+    return conntrack_get_nconns(dp->conntrack, nconns);
 }
 
 static int
 dpif_netdev_ipf_set_enabled(struct dpif *dpif, bool v6, bool enable)
 {
     struct dp_netdev *dp = get_dp_netdev(dpif);
-    return ipf_set_enabled(conntrack_ipf_ctx(&dp->conntrack), v6, enable);
+    return ipf_set_enabled(conntrack_ipf_ctx(dp->conntrack), v6, enable);
 }
 
 static int
 dpif_netdev_ipf_set_min_frag(struct dpif *dpif, bool v6, uint32_t min_frag)
 {
     struct dp_netdev *dp = get_dp_netdev(dpif);
-    return ipf_set_min_frag(conntrack_ipf_ctx(&dp->conntrack), v6, min_frag);
+    return ipf_set_min_frag(conntrack_ipf_ctx(dp->conntrack), v6, min_frag);
 }
 
 static int
 dpif_netdev_ipf_set_max_nfrags(struct dpif *dpif, uint32_t max_frags)
 {
     struct dp_netdev *dp = get_dp_netdev(dpif);
-    return ipf_set_max_nfrags(conntrack_ipf_ctx(&dp->conntrack), max_frags);
+    return ipf_set_max_nfrags(conntrack_ipf_ctx(dp->conntrack), max_frags);
 }
 
 /* Adjust this function if 'dpif_ipf_status' and 'ipf_status' were to
@@ -7378,7 +7382,7 @@ dpif_netdev_ipf_get_status(struct dpif *dpif,
                            struct dpif_ipf_status *dpif_ipf_status)
 {
     struct dp_netdev *dp = get_dp_netdev(dpif);
-    ipf_get_status(conntrack_ipf_ctx(&dp->conntrack),
+    ipf_get_status(conntrack_ipf_ctx(dp->conntrack),
                    (struct ipf_status *) dpif_ipf_status);
     return 0;
 }
@@ -7394,7 +7398,7 @@ static int
 dpif_netdev_ipf_dump_next(struct dpif *dpif, void *ipf_dump_ctx, char **dump)
 {
     struct dp_netdev *dp = get_dp_netdev(dpif);
-    return ipf_dump_next(conntrack_ipf_ctx(&dp->conntrack), ipf_dump_ctx,
+    return ipf_dump_next(conntrack_ipf_ctx(dp->conntrack), ipf_dump_ctx,
                          dump);
 }
 
