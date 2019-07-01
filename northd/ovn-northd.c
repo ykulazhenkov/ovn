@@ -4291,6 +4291,11 @@ build_pre_lb(struct ovn_datapath *od, struct hmap *lflows)
                   "nd || nd_rs || nd_ra", "next;");
     ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_LB, 110,
                   "nd || nd_rs || nd_ra", "next;");
+    char *svc_check_match = xasprintf("eth.src == "ETH_ADDR_FMT,
+                                      ETH_ADDR_ARGS(monitor_svc_mac));
+    ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_LB, 110,
+                  svc_check_match, "next;");
+    free(svc_check_match);
 
     /* Allow all packets to go to next tables by default. */
     ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_LB, 0, "1", "next;");
