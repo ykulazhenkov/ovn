@@ -42,9 +42,8 @@ out.  This is the right branch for general development.
 
 As of now there are no official OVN releases.
 
-Although building OVN, also builds OVS, it is recommended to clone
-and build OVS from its own repo. Please see the Open vSwitch
-documentation to build and install OVS.
+Before building OVN you should configure and build OVS.
+Please see the Open vSwitch documentation to build and install OVS.
 
 .. _general-build-reqs:
 
@@ -143,18 +142,25 @@ the "configure" script::
 
     $ ./boot.sh
 
+Before configuring OVN, clone, configure and build Open vSwitch.
+
 .. _general-configuring:
 
 Configuring
 -----------
 
-Configure the package by running the configure script. You can usually
-invoke configure without any arguments. For example::
+Configure the package by running the configure script. You need to
+invoke configure with atleast the argument --with-ovs-source.
+For example::
 
-    $ ./configure
+    $ ./configure --with-ovs-source=/path/to/ovs/source
+
+If you have built Open vSwitch in a separate directory, then you
+need to provide that path in the option - --with-ovs-build.
 
 By default all files are installed under ``/usr/local``. OVN expects to find
 its database in ``/usr/local/etc/ovn`` by default.
+
 If you want to install all files into, e.g., ``/usr`` and ``/var`` instead of
 ``/usr/local`` and ``/usr/local/var`` and expect to use ``/etc/ovn`` as
 the default database directory, add options as shown here::
@@ -271,6 +277,19 @@ using the jemalloc memory allocator, instead of the glibc memory allocator. If
 you wish to link with jemalloc add it to LIBS::
 
     $ ./configure LIBS=-ljemalloc
+
+Example usage::
+    $ # Clone OVS repo
+    $cd /home/foo/ovs
+    $./boot.sh
+    $mkdir _gcc
+    $cd _gcc && ../configure && cd ..
+    $make -C _gcc
+
+    $ # Clone OVN repo
+    $cd /home/foo/ovn
+    $./boot.sh
+    $./configure --with-ovs-source=/home/foo/ovs/ --with-ovs-build=/home/foo/ovs/_gcc
 
 .. _general-building:
 
