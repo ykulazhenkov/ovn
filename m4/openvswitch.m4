@@ -330,6 +330,17 @@ AC_DEFUN([OVS_CHECK_RUNDIR],
      [RUNDIR='${localstatedir}/run/openvswitch'])
    AC_SUBST([RUNDIR])])
 
+dnl Checks for the directory in which to store pidfiles.
+AC_DEFUN([OVN_CHECK_RUNDIR],
+  [AC_ARG_WITH(
+     [rundir],
+     AC_HELP_STRING([--with-ovn-rundir=DIR],
+                    [directory used for pidfiles
+                    [[LOCALSTATEDIR/run/ovn]]]),
+     [OVN_RUNDIR=$withval],
+     [OVN_RUNDIR='${localstatedir}/run/ovn'])
+   AC_SUBST([OVN_RUNDIR])])
+
 dnl Checks for the directory in which to store logs.
 AC_DEFUN([OVS_CHECK_LOGDIR],
   [AC_ARG_WITH(
