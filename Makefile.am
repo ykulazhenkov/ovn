@@ -77,7 +77,7 @@ endif
 # foo/__init__.py into an (older) version with plain foo.py, since
 # foo/__init__.pyc will cause Python to ignore foo.py.
 run_python = \
-	PYTHONPATH=$(top_srcdir)/python$(psep)$$PYTHONPATH \
+	PYTHONPATH=$(OVS_SRCDIR)/python$(psep)$$PYTHONPATH \
 	PYTHONDONTWRITEBYTECODE=yes $(PYTHON)
 
 ALL_LOCAL =
@@ -430,7 +430,7 @@ endif
 CLEANFILES += flake8-check
 
 include $(srcdir)/manpages.mk
-$(srcdir)/manpages.mk: $(MAN_ROOTS) build-aux/sodepends.py python/build/soutil.py
+$(srcdir)/manpages.mk: $(MAN_ROOTS) build-aux/sodepends.py $(OVS_SRCDIR)/python/build/soutil.py
 	@PYTHONPATH=$$PYTHONPATH$(psep)$(srcdir)/python $(PYTHON) $(srcdir)/build-aux/sodepends.py -I. -I$(srcdir) -I$(OVS_MANDIR) $(MAN_ROOTS) >$(@F).tmp
 	@if cmp -s $(@F).tmp $@; then \
 	  touch $@; \
@@ -516,7 +516,6 @@ include lib/ovsdb_automake.mk
 include ipsec/automake.mk
 include rhel/automake.mk
 include xenserver/automake.mk
-include python/automake.mk
 include tutorial/automake.mk
 include selinux/automake.mk
 include controller/automake.mk
