@@ -1593,6 +1593,89 @@ ovnact_put_mac_bind_free(struct ovnact_put_mac_bind *put_mac OVS_UNUSED)
 {
 }
 
+static void format_lookup_mac(const struct ovnact_lookup_mac_bind *lookup_mac,
+                              struct ds *s, const char *name)
+{
+    ds_put_format(s, "%s(", name);
+    expr_field_format(&lookup_mac->port, s);
+    ds_put_cstr(s, ", ");
+    expr_field_format(&lookup_mac->ip, s);
+    ds_put_cstr(s, ", ");
+    expr_field_format(&lookup_mac->mac, s);
+    ds_put_cstr(s, ");");
+}
+
+static void
+format_LOOKUP_ARP(const struct ovnact_lookup_mac_bind *lookup_mac,
+                         struct ds *s)
+{
+    format_lookup_mac(lookup_mac, s, "lookup_arp");
+}
+
+static void
+format_LOOKUP_ND(const struct ovnact_lookup_mac_bind *lookup_mac,
+                        struct ds *s)
+{
+    format_lookup_mac(lookup_mac, s, "lookup_nd");
+}
+
+static void
+encode_lookup_mac(const struct ovnact_lookup_mac_bind *lookup_mac,
+                  enum mf_field_id ip_field,
+                  const struct ovnact_encode_params *ep,
+                  struct ofpbuf *ofpacts)
+{
+    const struct arg args[] = {
+        { expr_resolve_field(&lookup_mac->port), MFF_LOG_INPORT },
+        { expr_resolve_field(&lookup_mac->ip), ip_field },
+        { expr_resolve_field(&lookup_mac->mac),  MFF_ETH_SRC},
+    };
+
+    encode_setup_args(args, ARRAY_SIZE(args), ofpacts);
+
+    put_load(0, MFF_ETH_DST, 0, 48, ofpacts);
+    emit_resubmit(ofpacts, ep->mac_lookup_ptable);
+
+    encode_restore_args(args, ARRAY_SIZE(args), ofpacts);
+}
+
+static void
+encode_LOOKUP_ARP(const struct ovnact_lookup_mac_bind *lookup_mac,
+                  const struct ovnact_encode_params *ep,
+                  struct ofpbuf *ofpacts)
+{
+    encode_lookup_mac(lookup_mac, MFF_REG0, ep, ofpacts);
+}
+
+static void
+encode_LOOKUP_ND(const struct ovnact_lookup_mac_bind *lookup_mac,
+                        const struct ovnact_encode_params *ep,
+                        struct ofpbuf *ofpacts)
+{
+    encode_lookup_mac(lookup_mac, MFF_XXREG0, ep, ofpacts);
+}
+
+static void
+parse_lookup_mac_bind(struct action_context *ctx, int width,
+                      struct ovnact_lookup_mac_bind *lookup_mac)
+{
+    lexer_force_match(ctx->lexer, LEX_T_LPAREN);
+    action_parse_field(ctx, 0, false, &lookup_mac->port);
+    lexer_force_match(ctx->lexer, LEX_T_COMMA);
+    action_parse_field(ctx, width, false, &lookup_mac->ip);
+    lexer_force_match(ctx->lexer, LEX_T_COMMA);
+    action_parse_field(ctx, 48, false, &lookup_mac->mac);
+    lexer_force_match(ctx->lexer, LEX_T_RPAREN);
+}
+
+static void
+ovnact_lookup_mac_bind_free(
+    struct ovnact_lookup_mac_bind *lookup_mac OVS_UNUSED)
+{
+
+}
+
+
 static void
 parse_gen_opt(struct action_context *ctx, struct ovnact_gen_option *o,
               const struct hmap *gen_opts, const char *opts_type)
@@ -2753,10 +2836,14 @@ parse_action(struct action_context *ctx)
         parse_get_mac_bind(ctx, 32, ovnact_put_GET_ARP(ctx->ovnacts));
     } else if (lexer_match_id(ctx->lexer, "put_arp")) {
         parse_put_mac_bind(ctx, 32, ovnact_put_PUT_ARP(ctx->ovnacts));
+    } else if (lexer_match_id(ctx->lexer, "lookup_arp")) {
+        parse_lookup_mac_bind(ctx, 32, ovnact_put_LOOKUP_ARP(ctx->ovnacts));
     } else if (lexer_match_id(ctx->lexer, "get_nd")) {
         parse_get_mac_bind(ctx, 128, ovnact_put_GET_ND(ctx->ovnacts));
     } else if (lexer_match_id(ctx->lexer, "put_nd")) {
         parse_put_mac_bind(ctx, 128, ovnact_put_PUT_ND(ctx->ovnacts));
+    } else if (lexer_match_id(ctx->lexer, "search_mac_in_nd")) {
+        parse_lookup_mac_bind(ctx, 128, ovnact_put_LOOKUP_ND(ctx->ovnacts));
     } else if (lexer_match_id(ctx->lexer, "set_queue")) {
         parse_SET_QUEUE(ctx);
     } else if (lexer_match_id(ctx->lexer, "log")) {

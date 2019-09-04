@@ -687,6 +687,7 @@ consider_logical_flow(
         .egress_ptable = OFTABLE_LOG_EGRESS_PIPELINE,
         .output_ptable = output_ptable,
         .mac_bind_ptable = OFTABLE_MAC_BINDING,
+        .mac_lookup_ptable = OFTABLE_MAC_LOOKUP,
     };
     ovnacts_encode(ovnacts.data, ovnacts.size, &ep, &ofpacts);
     ovnacts_free(ovnacts.data, ovnacts.size);
@@ -777,15 +778,17 @@ consider_neighbor_flow(struct ovsdb_idl_index *sbrec_port_binding_by_name,
         return;
     }
 
+    bool is_ipv4 = false;
+    ovs_be32 ip;
     struct match match = MATCH_CATCHALL_INITIALIZER;
     if (strchr(b->ip, '.')) {
-        ovs_be32 ip;
         if (!ip_parse(b->ip, &ip)) {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
             VLOG_WARN_RL(&rl, "bad 'ip' %s", b->ip);
             return;
         }
         match_set_reg(&match, 0, ntohl(ip));
+        is_ipv4 = true;
     } else {
         struct in6_addr ip6;
         if (!ipv6_parse(b->ip, &ip6)) {
@@ -806,6 +809,18 @@ consider_neighbor_flow(struct ovsdb_idl_index *sbrec_port_binding_by_name,
     put_load(mac.ea, sizeof mac.ea, MFF_ETH_DST, 0, 48, &ofpacts);
     ofctrl_add_flow(flow_table, OFTABLE_MAC_BINDING, 100, 0, &match, &ofpacts,
                     &b->header_.uuid);
+
+    if (is_ipv4) {
+        match_init_catchall(&match);
+        match_set_reg(&match, 0, ntohl(ip));
+        match_set_dl_type(&match, htons(ETH_TYPE_ARP));
+        match_set_metadata(&match, htonll(pb->datapath->tunnel_key));
+        match_set_reg(&match, MFF_LOG_INPORT - MFF_REG0, pb->tunnel_key);
+        match_set_arp_sha(&match, mac);
+        ofctrl_add_flow(flow_table, OFTABLE_MAC_LOOKUP, 100, 0, &match,
+                        &ofpacts, &b->header_.uuid);
+    }
+
     ofpbuf_uninit(&ofpacts);
 }
 

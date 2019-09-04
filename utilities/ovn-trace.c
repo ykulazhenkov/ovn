@@ -1705,6 +1705,15 @@ execute_get_mac_bind(const struct ovnact_get_mac_bind *bind,
 }
 
 static void
+execute_lookup_mac(const struct ovnact_lookup_mac_bind *bind OVS_UNUSED,
+                   const struct ovntrace_datapath *dp OVS_UNUSED,
+                   struct flow *uflow OVS_UNUSED,
+                   struct ovs_list *super OVS_UNUSED)
+{
+
+}
+
+static void
 execute_put_opts(const struct ovnact_put_opts *po,
                  const char *name, struct flow *uflow,
                  struct ovs_list *super)
@@ -2070,6 +2079,14 @@ trace_actions(const struct ovnact *ovnacts, size_t ovnacts_len,
         case OVNACT_PUT_ARP:
         case OVNACT_PUT_ND:
             /* Nothing to do for tracing. */
+            break;
+
+        case OVNACT_LOOKUP_ARP:
+            execute_lookup_mac(ovnact_get_LOOKUP_ARP(a), dp, uflow, super);
+            break;
+
+        case OVNACT_LOOKUP_ND:
+            execute_lookup_mac(ovnact_get_LOOKUP_ND(a), dp, uflow, super);
             break;
 
         case OVNACT_PUT_DHCPV4_OPTS:

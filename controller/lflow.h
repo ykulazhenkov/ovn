@@ -58,6 +58,7 @@ struct uuid;
  * you make any changes. */
 #define OFTABLE_PHY_TO_LOG            0
 #define OFTABLE_LOG_INGRESS_PIPELINE  8 /* First of LOG_PIPELINE_LEN tables. */
+#define OFTABLE_MAC_LOOKUP           31
 #define OFTABLE_REMOTE_OUTPUT        32
 #define OFTABLE_LOCAL_OUTPUT         33
 #define OFTABLE_CHECK_LOOPBACK       34
