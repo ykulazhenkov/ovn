@@ -5990,12 +5990,17 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         }
     }
 
+    char *svc_check_match = xasprintf("eth.dst == "ETH_ADDR_FMT,
+                                      ETH_ADDR_ARGS(svc_monitor_mac));
     /* Ingress table 17: Destination lookup, broadcast and multicast handling
      * (priority 70 - 100). */
     HMAP_FOR_EACH (od, key_node, datapaths) {
         if (!od->nbs) {
             continue;
         }
+
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, 110, svc_check_match,
+                      "handle_svc_check(inport);");
 
         struct mcast_switch_info *mcast_sw_info = &od->mcast_info.sw;
 
@@ -6056,6 +6061,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, 70, "eth.mcast",
                       "outport = \""MC_FLOOD"\"; output;");
     }
+    free(svc_check_match);
 
     /* Ingress table 17: Add IP multicast flows learnt from IGMP
      * (priority 90). */
@@ -10225,6 +10231,11 @@ static const char *rbac_mac_binding_auth[] =
 static const char *rbac_mac_binding_update[] =
     {"logical_port", "ip", "mac", "datapath"};
 
+static const char *rbac_svc_monitor_auth[] =
+    {""};
+static const char *rbac_svc_monitor_auth_update[] =
+    {"status"};
+
 static struct rbac_perm_cfg {
     const char *table;
     const char **auth;
@@ -10265,6 +10276,14 @@ static struct rbac_perm_cfg {
         .insdel = true,
         .update = rbac_mac_binding_update,
         .n_update = ARRAY_SIZE(rbac_mac_binding_update),
+        .row = NULL
+    },{
+        .table = "Service_Monitor",
+        .auth = rbac_svc_monitor_auth,
+        .n_auth = ARRAY_SIZE(rbac_svc_monitor_auth),
+        .insdel = false,
+        .update = rbac_svc_monitor_auth_update,
+        .n_update = ARRAY_SIZE(rbac_svc_monitor_auth_update),
         .row = NULL
     },{
         .table = NULL,
