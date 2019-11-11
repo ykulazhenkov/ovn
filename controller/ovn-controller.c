@@ -703,7 +703,7 @@ ctrl_register_ovs_idl(struct ovsdb_idl *ovs_idl)
     SB_NODE(datapath_binding, "datapath_binding") \
     SB_NODE(port_binding, "port_binding") \
     SB_NODE(mac_binding, "mac_binding") \
-    SB_NODE(logical_flow, "logical_flow") \
+    SB_NODE(datapath_logical_flow, "datapath_logical_flow") \
     SB_NODE(dhcp_options, "dhcp_options") \
     SB_NODE(dhcpv6_options, "dhcpv6_options") \
     SB_NODE(dns, "dns")
@@ -1170,6 +1170,19 @@ en_ct_zones_is_valid(struct engine_node *node OVS_UNUSED)
     return true;
 }
 
+static bool
+runtime_data_sb_datapath_binding_handler(struct engine_node *node OVS_UNUSED,
+                                         void *data OVS_UNUSED)
+{
+    /* When a datapath is added, deleted or updated we don't have to do
+     * any flow computation or recomputation. That is because
+     * when datapath is deleted, related changes like - port_binding,
+     * datapath_logical_flow are also triggered. And the corresponding
+     * handlers handle them.
+     */
+    return true;
+}
+
 struct ed_type_mff_ovn_geneve {
     enum mf_field_id mff_ovn_geneve;
 };
@@ -1318,9 +1331,9 @@ en_flow_output_run(struct engine_node *node, void *data)
         (struct sbrec_dhcpv6_options_table *)EN_OVSDB_GET(
             engine_get_input("SB_dhcpv6_options", node));
 
-    struct sbrec_logical_flow_table *logical_flow_table =
-        (struct sbrec_logical_flow_table *)EN_OVSDB_GET(
-            engine_get_input("SB_logical_flow", node));
+    struct sbrec_datapath_binding_table *datapath_binding_table =
+        (struct sbrec_datapath_binding_table *)EN_OVSDB_GET(
+            engine_get_input("SB_datapath_binding", node));
 
     struct sbrec_mac_binding_table *mac_binding_table =
         (struct sbrec_mac_binding_table *)EN_OVSDB_GET(
@@ -1330,7 +1343,7 @@ en_flow_output_run(struct engine_node *node, void *data)
     lflow_run(sbrec_multicast_group_by_name_datapath,
               sbrec_port_binding_by_name,
               dhcp_table, dhcpv6_table,
-              logical_flow_table,
+              datapath_binding_table,
               mac_binding_table,
               chassis, local_datapaths, addr_sets,
               port_groups, active_tunnels, local_lport_ids,
@@ -1363,7 +1376,21 @@ en_flow_output_run(struct engine_node *node, void *data)
 }
 
 static bool
-flow_output_sb_logical_flow_handler(struct engine_node *node, void *data)
+flow_output_sb_datapath_binding_handler(struct engine_node *node OVS_UNUSED,
+                                        void *data OVS_UNUSED)
+{
+    /* When a datapath is added, deleted or updated we don't have to do
+     * any flow computation or recomputation. That is because
+     * when datapath is deleted, related changes like - port_binding,
+     * datapath_logical_flow are also triggered. And the corresponding
+     * handlers handle them.
+     */
+    return true;
+}
+
+static bool
+flow_output_sb_datapath_logical_flow_handler(struct engine_node *node,
+                                             void *data)
 {
     struct ed_type_runtime_data *rt_data =
         engine_get_input_data("runtime_data", node);
@@ -1424,15 +1451,15 @@ flow_output_sb_logical_flow_handler(struct engine_node *node, void *data)
         (struct sbrec_dhcpv6_options_table *)EN_OVSDB_GET(
             engine_get_input("SB_dhcpv6_options", node));
 
-    struct sbrec_logical_flow_table *logical_flow_table =
-        (struct sbrec_logical_flow_table *)EN_OVSDB_GET(
-            engine_get_input("SB_logical_flow", node));
+    struct sbrec_datapath_logical_flow_table *dp_lflow_table =
+        (struct sbrec_datapath_logical_flow_table *)EN_OVSDB_GET(
+            engine_get_input("SB_datapath_logical_flow", node));
 
     bool handled = lflow_handle_changed_flows(
               sbrec_multicast_group_by_name_datapath,
               sbrec_port_binding_by_name,
               dhcp_table, dhcpv6_table,
-              logical_flow_table,
+              dp_lflow_table,
               local_datapaths, chassis, addr_sets,
               port_groups, active_tunnels, local_lport_ids,
               flow_table, group_table, meter_table, lfrr,
@@ -1613,8 +1640,51 @@ flow_output_sb_multicast_group_handler(struct engine_node *node, void *data)
             mff_ovn_geneve, chassis, ct_zones, local_datapaths,
             flow_table);
 
+    struct ovn_extend_table *group_table = &fo->group_table;
+    struct ovn_extend_table *meter_table = &fo->meter_table;
+    uint32_t *conj_id_ofs = &fo->conj_id_ofs;
+    struct lflow_resource_ref *lfrr = &fo->lflow_resource_ref;
+
+    struct ovsdb_idl_index *sbrec_multicast_group_by_name_datapath =
+        engine_ovsdb_node_get_index(
+                engine_get_input("SB_multicast_group", node),
+                "name_datapath");
+
+    struct ovsdb_idl_index *sbrec_port_binding_by_name =
+        engine_ovsdb_node_get_index(
+                engine_get_input("SB_port_binding", node),
+                "name");
+
+    struct sbrec_dhcp_options_table *dhcp_table =
+        (struct sbrec_dhcp_options_table *)EN_OVSDB_GET(
+            engine_get_input("SB_dhcp_options", node));
+
+    struct sbrec_dhcpv6_options_table *dhcpv6_table =
+        (struct sbrec_dhcpv6_options_table *)EN_OVSDB_GET(
+            engine_get_input("SB_dhcpv6_options", node));
+
+    struct ed_type_addr_sets *as_data =
+        (struct ed_type_addr_sets *)engine_get_input("addr_sets", node)->data;
+    struct shash *addr_sets = &as_data->addr_sets;
+    struct ed_type_port_groups *pg_data =
+        (struct ed_type_port_groups *)engine_get_input(
+            "port_groups", node)->data;
+    struct shash *port_groups = &pg_data->port_groups;
+    struct sset *active_tunnels = &rt_data->active_tunnels;
+    struct sset *local_lport_ids = &rt_data->local_lport_ids;
+
+    bool handled = lflow_handle_mc_group_changes(
+            multicast_group_table,
+            sbrec_multicast_group_by_name_datapath,
+            sbrec_port_binding_by_name,
+            dhcp_table, dhcpv6_table,
+            local_datapaths, chassis, addr_sets,
+            port_groups, active_tunnels, local_lport_ids,
+            flow_table, group_table, meter_table, lfrr,
+            conj_id_ofs);
+
     engine_set_node_state(node, EN_UPDATED);
-    return true;
+    return handled;
 
 }
 
@@ -1681,9 +1751,9 @@ _flow_output_resource_ref_handler(struct engine_node *node, void *data,
         (struct sbrec_dhcpv6_options_table *)EN_OVSDB_GET(
             engine_get_input("SB_dhcpv6_options", node));
 
-    struct sbrec_logical_flow_table *logical_flow_table =
-        (struct sbrec_logical_flow_table *)EN_OVSDB_GET(
-            engine_get_input("SB_logical_flow", node));
+    struct sbrec_datapath_logical_flow_table *dp_lflow_table =
+        (struct sbrec_datapath_logical_flow_table *)EN_OVSDB_GET(
+            engine_get_input("SB_datapath_logical_flow", node));
 
     bool changed;
     const char *ref_name;
@@ -1717,7 +1787,7 @@ _flow_output_resource_ref_handler(struct engine_node *node, void *data,
         if (!lflow_handle_changed_ref(ref_type, ref_name,
                     sbrec_multicast_group_by_name_datapath,
                     sbrec_port_binding_by_name,dhcp_table,
-                    dhcpv6_table, logical_flow_table,
+                    dhcpv6_table, dp_lflow_table,
                     local_datapaths, chassis, addr_sets,
                     port_groups, active_tunnels, local_lport_ids,
                     flow_table, group_table, meter_table, lfrr,
@@ -1732,7 +1802,7 @@ _flow_output_resource_ref_handler(struct engine_node *node, void *data,
         if (!lflow_handle_changed_ref(ref_type, ref_name,
                     sbrec_multicast_group_by_name_datapath,
                     sbrec_port_binding_by_name,dhcp_table,
-                    dhcpv6_table, logical_flow_table,
+                    dhcpv6_table, dp_lflow_table,
                     local_datapaths, chassis, addr_sets,
                     port_groups, active_tunnels, local_lport_ids,
                     flow_table, group_table, meter_table, lfrr,
@@ -1747,7 +1817,7 @@ _flow_output_resource_ref_handler(struct engine_node *node, void *data,
         if (!lflow_handle_changed_ref(ref_type, ref_name,
                     sbrec_multicast_group_by_name_datapath,
                     sbrec_port_binding_by_name,dhcp_table,
-                    dhcpv6_table, logical_flow_table,
+                    dhcpv6_table, dp_lflow_table,
                     local_datapaths, chassis, addr_sets,
                     port_groups, active_tunnels, local_lport_ids,
                     flow_table, group_table, meter_table, lfrr,
@@ -1923,8 +1993,10 @@ main(int argc, char *argv[])
                      flow_output_sb_port_binding_handler);
     engine_add_input(&en_flow_output, &en_sb_mac_binding,
                      flow_output_sb_mac_binding_handler);
-    engine_add_input(&en_flow_output, &en_sb_logical_flow,
-                     flow_output_sb_logical_flow_handler);
+    engine_add_input(&en_flow_output, &en_sb_datapath_binding,
+                     flow_output_sb_datapath_binding_handler);
+    engine_add_input(&en_flow_output, &en_sb_datapath_logical_flow,
+                     flow_output_sb_datapath_logical_flow_handler);
     engine_add_input(&en_flow_output, &en_sb_dhcp_options, NULL);
     engine_add_input(&en_flow_output, &en_sb_dhcpv6_options, NULL);
     engine_add_input(&en_flow_output, &en_sb_dns, NULL);
@@ -1941,7 +2013,8 @@ main(int argc, char *argv[])
     engine_add_input(&en_runtime_data, &en_ovs_qos, NULL);
 
     engine_add_input(&en_runtime_data, &en_sb_chassis, NULL);
-    engine_add_input(&en_runtime_data, &en_sb_datapath_binding, NULL);
+    engine_add_input(&en_runtime_data, &en_sb_datapath_binding,
+                     runtime_data_sb_datapath_binding_handler);
     engine_add_input(&en_runtime_data, &en_sb_port_binding,
                      runtime_data_sb_port_binding_handler);
 
