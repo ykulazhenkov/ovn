@@ -377,7 +377,7 @@ struct ovntrace_datapath {
     struct ovs_list mcgroups;   /* Contains "struct ovntrace_mcgroup"s. */
 
     struct ovntrace_flow **flows;
-    size_t n_flows, allocated_flows;
+    size_t n_flows;
 
     struct hmap mac_bindings;   /* Contains "struct ovntrace_mac_binding"s. */
 
@@ -852,89 +852,86 @@ static void
 read_flows(void)
 {
     ovn_init_symtab(&symtab);
-
-    const struct sbrec_logical_flow *sblf;
-    SBREC_LOGICAL_FLOW_FOR_EACH (sblf, ovnsb_idl) {
-        const struct sbrec_datapath_binding *sbdb = sblf->logical_datapath;
+    const struct sbrec_datapath_binding *sbdb;
+    SBREC_DATAPATH_BINDING_FOR_EACH (sbdb, ovnsb_idl) {
         struct ovntrace_datapath *dp
             = ovntrace_datapath_find_by_sb_uuid(&sbdb->header_.uuid);
-        if (!dp) {
-            VLOG_WARN("logical flow missing datapath");
-            continue;
+        ovs_assert(dp);
+
+        dp->n_flows = 0;
+        dp->flows = xcalloc(sbdb->n_flows, sizeof *dp->flows);
+
+        for (size_t i = 0; i < sbdb->n_flows; i++) {
+            const struct sbrec_datapath_logical_flow *sblf = sbdb->flows[i];
+            char *error;
+            struct expr *match;
+            match = expr_parse_string(sblf->match, &symtab, &address_sets,
+                                    &port_groups, NULL, &error);
+            if (error) {
+                VLOG_WARN("%s: parsing expression failed (%s)",
+                        sblf->match, error);
+                free(error);
+                continue;
+            }
+
+            struct ovnact_parse_params pp = {
+                .symtab = &symtab,
+                .dhcp_opts = &dhcp_opts,
+                .dhcpv6_opts = &dhcpv6_opts,
+                .nd_ra_opts = &nd_ra_opts,
+                .pipeline = (!strcmp(sblf->pipeline, "ingress")
+                            ? OVNACT_P_INGRESS
+                            : OVNACT_P_EGRESS),
+                .n_tables = 24,
+                .cur_ltable = sblf->table_id,
+            };
+            uint64_t stub[1024 / 8];
+            struct ofpbuf ovnacts = OFPBUF_STUB_INITIALIZER(stub);
+            struct expr *prereqs;
+            error = ovnacts_parse_string(sblf->actions, &pp, &ovnacts,
+                                         &prereqs);
+            if (error) {
+                VLOG_WARN("%s: parsing actions failed (%s)",
+                          sblf->actions, error);
+                free(error);
+                expr_destroy(match);
+                continue;
+            }
+
+            match = expr_combine(EXPR_T_AND, match, prereqs);
+            match = expr_annotate(match, &symtab, &error);
+            if (error) {
+                VLOG_WARN("match annotation failed (%s)", error);
+                free(error);
+                expr_destroy(match);
+                ovnacts_free(ovnacts.data, ovnacts.size);
+                ofpbuf_uninit(&ovnacts);
+                continue;
+            }
+            if (match) {
+                match = expr_simplify(match, ovntrace_is_chassis_resident,
+                                      NULL);
+            }
+
+            struct ovntrace_flow *flow = xzalloc(sizeof *flow);
+            flow->uuid = sblf->header_.uuid;
+            flow->pipeline = (!strcmp(sblf->pipeline, "ingress")
+                            ? OVNACT_P_INGRESS
+                            : OVNACT_P_EGRESS);
+            flow->table_id = sblf->table_id;
+            flow->stage_name = nullable_xstrdup(smap_get(&sblf->external_ids,
+                                                        "stage-name"));
+            flow->source = nullable_xstrdup(smap_get(&sblf->external_ids,
+                                                    "source"));
+            flow->priority = sblf->priority;
+            flow->match_s = ovntrace_make_names_friendly(sblf->match);
+            flow->match = match;
+            flow->ovnacts_len = ovnacts.size;
+            flow->ovnacts = ofpbuf_steal_data(&ovnacts);
+
+            dp->flows[dp->n_flows++] = flow;
         }
 
-        char *error;
-        struct expr *match;
-        match = expr_parse_string(sblf->match, &symtab, &address_sets,
-                                  &port_groups, NULL, &error);
-        if (error) {
-            VLOG_WARN("%s: parsing expression failed (%s)",
-                      sblf->match, error);
-            free(error);
-            continue;
-        }
-
-        struct ovnact_parse_params pp = {
-            .symtab = &symtab,
-            .dhcp_opts = &dhcp_opts,
-            .dhcpv6_opts = &dhcpv6_opts,
-            .nd_ra_opts = &nd_ra_opts,
-            .pipeline = (!strcmp(sblf->pipeline, "ingress")
-                         ? OVNACT_P_INGRESS
-                         : OVNACT_P_EGRESS),
-            .n_tables = 24,
-            .cur_ltable = sblf->table_id,
-        };
-        uint64_t stub[1024 / 8];
-        struct ofpbuf ovnacts = OFPBUF_STUB_INITIALIZER(stub);
-        struct expr *prereqs;
-        error = ovnacts_parse_string(sblf->actions, &pp, &ovnacts, &prereqs);
-        if (error) {
-            VLOG_WARN("%s: parsing actions failed (%s)", sblf->actions, error);
-            free(error);
-            expr_destroy(match);
-            continue;
-        }
-
-        match = expr_combine(EXPR_T_AND, match, prereqs);
-        match = expr_annotate(match, &symtab, &error);
-        if (error) {
-            VLOG_WARN("match annotation failed (%s)", error);
-            free(error);
-            expr_destroy(match);
-            ovnacts_free(ovnacts.data, ovnacts.size);
-            ofpbuf_uninit(&ovnacts);
-            continue;
-        }
-        if (match) {
-            match = expr_simplify(match, ovntrace_is_chassis_resident, NULL);
-        }
-
-        struct ovntrace_flow *flow = xzalloc(sizeof *flow);
-        flow->uuid = sblf->header_.uuid;
-        flow->pipeline = (!strcmp(sblf->pipeline, "ingress")
-                          ? OVNACT_P_INGRESS
-                          : OVNACT_P_EGRESS);
-        flow->table_id = sblf->table_id;
-        flow->stage_name = nullable_xstrdup(smap_get(&sblf->external_ids,
-                                                     "stage-name"));
-        flow->source = nullable_xstrdup(smap_get(&sblf->external_ids,
-                                                 "source"));
-        flow->priority = sblf->priority;
-        flow->match_s = ovntrace_make_names_friendly(sblf->match);
-        flow->match = match;
-        flow->ovnacts_len = ovnacts.size;
-        flow->ovnacts = ofpbuf_steal_data(&ovnacts);
-
-        if (dp->n_flows >= dp->allocated_flows) {
-            dp->flows = x2nrealloc(dp->flows, &dp->allocated_flows,
-                                   sizeof *dp->flows);
-        }
-        dp->flows[dp->n_flows++] = flow;
-    }
-
-    const struct ovntrace_datapath *dp;
-    HMAP_FOR_EACH (dp, sb_uuid_node, &datapaths) {
         qsort(dp->flows, dp->n_flows, sizeof *dp->flows, compare_flow);
     }
 }

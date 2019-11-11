@@ -529,6 +529,7 @@ pre_get_info(struct ctl_context *ctx)
     ovsdb_idl_add_column(ctx->idl, &sbrec_logical_flow_col_external_ids);
 
     ovsdb_idl_add_column(ctx->idl, &sbrec_datapath_binding_col_external_ids);
+    ovsdb_idl_add_column(ctx->idl, &sbrec_datapath_binding_col_flows);
 
     ovsdb_idl_add_column(ctx->idl, &sbrec_ip_multicast_col_datapath);
     ovsdb_idl_add_column(ctx->idl, &sbrec_ip_multicast_col_seq_no);
@@ -542,6 +543,14 @@ pre_get_info(struct ctl_context *ctx)
     ovsdb_idl_add_column(ctx->idl, &sbrec_mac_binding_col_logical_port);
     ovsdb_idl_add_column(ctx->idl, &sbrec_mac_binding_col_ip);
     ovsdb_idl_add_column(ctx->idl, &sbrec_mac_binding_col_mac);
+
+    ovsdb_idl_add_column(ctx->idl, &sbrec_datapath_logical_flow_col_pipeline);
+    ovsdb_idl_add_column(ctx->idl, &sbrec_datapath_logical_flow_col_actions);
+    ovsdb_idl_add_column(ctx->idl, &sbrec_datapath_logical_flow_col_priority);
+    ovsdb_idl_add_column(ctx->idl, &sbrec_datapath_logical_flow_col_table_id);
+    ovsdb_idl_add_column(ctx->idl, &sbrec_datapath_logical_flow_col_match);
+    ovsdb_idl_add_column(ctx->idl,
+                         &sbrec_datapath_logical_flow_col_external_ids);
 }
 
 static struct cmd_show_table cmd_show_tables[] = {
@@ -708,10 +717,10 @@ pipeline_encode(const char *pl)
 static int
 lflow_cmp(const void *lf1_, const void *lf2_)
 {
-    const struct sbrec_logical_flow *const *lf1p = lf1_;
-    const struct sbrec_logical_flow *const *lf2p = lf2_;
-    const struct sbrec_logical_flow *lf1 = *lf1p;
-    const struct sbrec_logical_flow *lf2 = *lf2p;
+    const struct sbrec_datapath_logical_flow *const *lf1p = lf1_;
+    const struct sbrec_datapath_logical_flow *const *lf2p = lf2_;
+    const struct sbrec_datapath_logical_flow *lf1 = *lf1p;
+    const struct sbrec_datapath_logical_flow *lf2 = *lf2p;
 
     int pl1 = pipeline_encode(lf1->pipeline);
     int pl2 = pipeline_encode(lf2->pipeline);
@@ -725,8 +734,6 @@ lflow_cmp(const void *lf1_, const void *lf2_)
         } \
     } while (0)
 
-    CMP(uuid_compare_3way(&lf1->logical_datapath->header_.uuid,
-                          &lf2->logical_datapath->header_.uuid));
     CMP(pl1 - pl2);
     CMP(lf1->table_id > lf2->table_id ? 1 :
             (lf1->table_id < lf2->table_id ? -1 : 0));
@@ -1011,6 +1018,86 @@ cmd_lflow_list_chassis(struct ctl_context *ctx, struct vconn *vconn,
 }
 
 static void
+cmd_lflow_list_datapath(struct ctl_context *ctx,
+                        const struct sbrec_datapath_binding *datapath,
+                        struct vconn *vconn, bool stats, bool print_uuid,
+                        bool vflows)
+{
+    if (!datapath || !datapath->n_flows) {
+        return;
+    }
+
+    size_t n_flows = datapath->n_flows;
+    const struct sbrec_datapath_logical_flow **lflows =
+        xcalloc(datapath->n_flows, sizeof *lflows);
+    for (size_t i = 0; i < datapath->n_flows; i++) {
+        lflows[i] = datapath->flows[i];
+    }
+
+    if (n_flows) {
+        qsort(lflows, n_flows, sizeof *lflows, lflow_cmp);
+    }
+
+    const struct sbrec_datapath_logical_flow *lflow = NULL;
+    const struct sbrec_datapath_logical_flow *prev = NULL;
+    for (size_t i = 0; i < n_flows; i++) {
+        lflow = lflows[i];
+
+        /* Figure out whether to print this particular flow.  By default, we
+         * print all flows, but if any UUIDs were listed on the command line
+         * then we only print the matching ones. */
+        bool include;
+        if (ctx->argc > 1) {
+            include = false;
+            for (size_t j = 1; j < ctx->argc; j++) {
+                if (is_partial_uuid_match(&lflow->header_.uuid,
+                                          ctx->argv[j])) {
+                    include = true;
+                    break;
+                }
+            }
+        } else {
+            include = true;
+        }
+        if (!include) {
+            continue;
+        }
+
+        /* Print a header line for this datapath or pipeline, if we haven't
+         * already done so. */
+        if (!prev
+            || strcmp(prev->pipeline, lflow->pipeline)) {
+            printf("Datapath: ");
+            print_datapath_name(datapath);
+            printf(" ("UUID_FMT")  Pipeline: %s\n",
+                   UUID_ARGS(&datapath->header_.uuid),
+                   lflow->pipeline);
+        }
+
+        /* Print the flow. */
+        printf("  ");
+        print_uuid_part(&lflow->header_.uuid, print_uuid);
+        printf("table=%-2"PRId64"(%-19s), priority=%-5"PRId64
+               ", match=(%s), action=(%s)\n",
+               lflow->table_id,
+               smap_get_def(&lflow->external_ids, "stage-name", ""),
+               lflow->priority, lflow->match, lflow->actions);
+        if (vconn) {
+            sbctl_dump_openflow(vconn, &lflow->header_.uuid, stats);
+        }
+        prev = lflow;
+    }
+
+    if (vflows) {
+        cmd_lflow_list_port_bindings(ctx, vconn, datapath, stats, print_uuid);
+        cmd_lflow_list_mac_bindings(ctx, vconn, datapath, stats, print_uuid);
+        cmd_lflow_list_mc_groups(ctx, vconn, datapath, stats, print_uuid);
+    }
+
+    free(lflows);
+}
+
+static void
 cmd_lflow_list(struct ctl_context *ctx)
 {
     const struct sbrec_datapath_binding *datapath = NULL;
@@ -1040,89 +1127,23 @@ cmd_lflow_list(struct ctl_context *ctx)
 
     struct vconn *vconn = sbctl_open_vconn(&ctx->options);
     bool stats = shash_find(&ctx->options, "--stats") != NULL;
-
-    const struct sbrec_logical_flow **lflows = NULL;
-    size_t n_flows = 0;
-    size_t n_capacity = 0;
-    const struct sbrec_logical_flow *lflow;
-    SBREC_LOGICAL_FLOW_FOR_EACH (lflow, ctx->idl) {
-        if (datapath && lflow->logical_datapath != datapath) {
-            continue;
-        }
-
-        if (n_flows == n_capacity) {
-            lflows = x2nrealloc(lflows, &n_capacity, sizeof *lflows);
-        }
-        lflows[n_flows] = lflow;
-        n_flows++;
-    }
-
-    if (n_flows) {
-        qsort(lflows, n_flows, sizeof *lflows, lflow_cmp);
-    }
-
     bool print_uuid = shash_find(&ctx->options, "--uuid") != NULL;
+    bool vflows = shash_find(&ctx->options, "--vflows") != NULL;
 
-    const struct sbrec_logical_flow *prev = NULL;
-    for (size_t i = 0; i < n_flows; i++) {
-        lflow = lflows[i];
-
-        /* Figure out whether to print this particular flow.  By default, we
-         * print all flows, but if any UUIDs were listed on the command line
-         * then we only print the matching ones. */
-        bool include;
-        if (ctx->argc > 1) {
-            include = false;
-            for (size_t j = 1; j < ctx->argc; j++) {
-                if (is_partial_uuid_match(&lflow->header_.uuid,
-                                          ctx->argv[j])) {
-                    include = true;
-                    break;
-                }
-            }
-        } else {
-            include = true;
+    if (datapath) {
+        cmd_lflow_list_datapath(ctx, datapath, vconn, stats, print_uuid,
+                                vflows);
+    } else {
+        SBREC_DATAPATH_BINDING_FOR_EACH (datapath, ctx->idl) {
+            cmd_lflow_list_datapath(ctx, datapath, vconn, stats, print_uuid,
+                                    vflows);
         }
-        if (!include) {
-            continue;
-        }
-
-        /* Print a header line for this datapath or pipeline, if we haven't
-         * already done so. */
-        if (!prev
-            || prev->logical_datapath != lflow->logical_datapath
-            || strcmp(prev->pipeline, lflow->pipeline)) {
-            printf("Datapath: ");
-            print_datapath_name(lflow->logical_datapath);
-            printf(" ("UUID_FMT")  Pipeline: %s\n",
-                   UUID_ARGS(&lflow->logical_datapath->header_.uuid),
-                   lflow->pipeline);
-        }
-
-        /* Print the flow. */
-        printf("  ");
-        print_uuid_part(&lflow->header_.uuid, print_uuid);
-        printf("table=%-2"PRId64"(%-19s), priority=%-5"PRId64
-               ", match=(%s), action=(%s)\n",
-               lflow->table_id,
-               smap_get_def(&lflow->external_ids, "stage-name", ""),
-               lflow->priority, lflow->match, lflow->actions);
-        if (vconn) {
-            sbctl_dump_openflow(vconn, &lflow->header_.uuid, stats);
-        }
-        prev = lflow;
     }
 
-    bool vflows = shash_find(&ctx->options, "--vflows") != NULL;
     if (vflows) {
-        cmd_lflow_list_port_bindings(ctx, vconn, datapath, stats, print_uuid);
-        cmd_lflow_list_mac_bindings(ctx, vconn, datapath, stats, print_uuid);
-        cmd_lflow_list_mc_groups(ctx, vconn, datapath, stats, print_uuid);
         cmd_lflow_list_chassis(ctx, vconn, stats, print_uuid);
     }
-
     vconn_close(vconn);
-    free(lflows);
 }
 
 static void

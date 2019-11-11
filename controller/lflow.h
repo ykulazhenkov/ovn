@@ -46,8 +46,10 @@ struct hmap_node;
 struct sbrec_chassis;
 struct sbrec_dhcp_options_table;
 struct sbrec_dhcpv6_options_table;
-struct sbrec_logical_flow_table;
+struct sbrec_datapath_binding_table;
+struct sbrec_datapath_logical_flow_table;
 struct sbrec_mac_binding_table;
+struct sbrec_multicast_group_table;
 struct simap;
 struct sset;
 struct uuid;
@@ -120,18 +122,18 @@ void lflow_run(struct ovsdb_idl_index *sbrec_multicast_group_by_name_datapath,
                struct ovsdb_idl_index *sbrec_port_binding_by_name,
                const struct sbrec_dhcp_options_table *,
                const struct sbrec_dhcpv6_options_table *,
-               const struct sbrec_logical_flow_table *,
+               const struct sbrec_datapath_binding_table *,
                const struct sbrec_mac_binding_table *,
-               const struct sbrec_chassis *chassis,
+               const struct sbrec_chassis *,
                const struct hmap *local_datapaths,
                const struct shash *addr_sets,
                const struct shash *port_groups,
                const struct sset *active_tunnels,
                const struct sset *local_lport_ids,
-               struct ovn_desired_flow_table *,
+               struct ovn_desired_flow_table *flow_table,
                struct ovn_extend_table *group_table,
                struct ovn_extend_table *meter_table,
-               struct lflow_resource_ref *,
+               struct lflow_resource_ref *lfrr,
                uint32_t *conj_id_ofs);
 
 bool lflow_handle_changed_flows(
@@ -139,7 +141,7 @@ bool lflow_handle_changed_flows(
     struct ovsdb_idl_index *sbrec_port_binding_by_name,
     const struct sbrec_dhcp_options_table *,
     const struct sbrec_dhcpv6_options_table *,
-    const struct sbrec_logical_flow_table *,
+    const struct sbrec_datapath_logical_flow_table *,
     const struct hmap *local_datapaths,
     const struct sbrec_chassis *,
     const struct shash *addr_sets,
@@ -159,7 +161,7 @@ bool lflow_handle_changed_ref(
     struct ovsdb_idl_index *sbrec_port_binding_by_name,
     const struct sbrec_dhcp_options_table *,
     const struct sbrec_dhcpv6_options_table *,
-    const struct sbrec_logical_flow_table *,
+    const struct sbrec_datapath_logical_flow_table *,
     const struct hmap *local_datapaths,
     const struct sbrec_chassis *,
     const struct shash *addr_sets,
@@ -177,6 +179,24 @@ void lflow_handle_changed_neighbors(
     struct ovsdb_idl_index *sbrec_port_binding_by_name,
     const struct sbrec_mac_binding_table *,
     struct ovn_desired_flow_table *);
+
+bool lflow_handle_mc_group_changes(
+    const struct sbrec_multicast_group_table *,
+    struct ovsdb_idl_index *sbrec_multicast_group_by_name_datapath,
+    struct ovsdb_idl_index *sbrec_port_binding_by_name,
+    const struct sbrec_dhcp_options_table *,
+    const struct sbrec_dhcpv6_options_table *,
+    const struct hmap *local_datapaths,
+    const struct sbrec_chassis *,
+    const struct shash *addr_sets,
+    const struct shash *port_groups,
+    const struct sset *active_tunnels,
+    const struct sset *local_lport_ids,
+    struct ovn_desired_flow_table *,
+    struct ovn_extend_table *group_table,
+    struct ovn_extend_table *meter_table,
+    struct lflow_resource_ref *,
+    uint32_t *conj_id_ofs);
 
 void lflow_destroy(void);
 

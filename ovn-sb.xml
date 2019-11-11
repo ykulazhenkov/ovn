@@ -2286,6 +2286,9 @@ tcp.flags = RST;
       constructed for each supported encapsulation.
     </column>
 
+    <column name="flows">
+    </column>
+
     <group title="OVN_Northbound Relationship">
       <p>
         Each row in <ref table="Datapath_Binding"/> is associated with some
@@ -2340,6 +2343,27 @@ tcp.flags = RST;
     </group>
   </table>
 
+  <table name="Datapath_Logical_Flow" title="Logical Network Flows">
+     <column name="pipeline">
+     </column>
+
+     <column name="table_id">
+     </column>
+
+     <column name="priority">
+     </column>
+
+     <column name="match">
+     </column>
+
+     <column name="actions">
+     </column>
+
+     <column name="dp_tunnel_key">
+     </column>
+     <column name="external_ids">
+     </column>
+  </table>
   <table name="Port_Binding" title="Physical-Logical Port Bindings">
     <p>
       Each row in this table binds a logical port to a realization.  For most
