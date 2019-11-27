@@ -111,6 +111,12 @@ struct engine_node {
      * and run() function of the current node. Users should ensure that the
      * data is read-only in change-handlers of the nodes that depends on this
      * node. */
+    void *internal_data;
+
+    /* A pointer to node data accessible for users outside the processing
+     * engine. The value of the pointer is updated by the engine itself and
+     * users should ensure that the data is only read.
+     */
     void *data;
 
     /* State of the node after the last engine run. */
@@ -125,6 +131,13 @@ struct engine_node {
     /* Fully processes all inputs of this node and regenerates the data
      * of this node */
     void (*run)(struct engine_node *);
+
+    /* Method to validate if the 'internal_data' is valid. This allows users
+     * to customize when 'internal_data' can be used (e.g., even if the node
+     * hasn't been refreshed in the last iteration, if 'internal_data'
+     * doesn't store pointers to DB records it's still safe to use).
+     */
+    bool (*is_valid)(struct engine_node *);
 };
 
 /* Initialize the data for the engine nodes. It calls each node's
@@ -201,7 +214,7 @@ struct ed_type_ovsdb_table {
 };
 
 #define EN_OVSDB_GET(NODE) \
-    (((struct ed_type_ovsdb_table *)NODE->data)->table)
+    (((struct ed_type_ovsdb_table *)NODE->internal_data)->table)
 
 struct ovsdb_idl_index * engine_ovsdb_node_get_index(struct engine_node *,
                                                      const char *name);
@@ -210,15 +223,24 @@ void engine_ovsdb_node_add_index(struct engine_node *, const char *name,
                                  struct ovsdb_idl_index *);
 
 /* Macro to define an engine node. */
-#define ENGINE_NODE(NAME, NAME_STR) \
+#define ENGINE_NODE_DEF(NAME, NAME_STR) \
     struct engine_node en_##NAME = { \
         .name = NAME_STR, \
-        .data = &ed_##NAME, \
+        .internal_data = &ed_##NAME, \
+        .data = NULL, \
         .state = EN_STALE, \
         .init = en_##NAME##_init, \
         .run = en_##NAME##_run, \
         .cleanup = en_##NAME##_cleanup, \
+        .is_valid = en_##NAME##_is_valid, \
     };
+
+#define ENGINE_NODE_CUSTOM_DATA(NAME, NAME_STR) \
+    ENGINE_NODE_DEF(NAME, NAME_STR)
+
+#define ENGINE_NODE(NAME, NAME_STR) \
+    static bool (*en_##NAME##_is_valid)(struct engine_node *node) = NULL; \
+    ENGINE_NODE_DEF(NAME, NAME_STR)
 
 /* Macro to define member functions of an engine node which represents
  * a table of OVSDB */
