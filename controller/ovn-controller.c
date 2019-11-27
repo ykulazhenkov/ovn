@@ -758,10 +758,10 @@ en_ofctrl_is_connected_run(struct engine_node *node)
         (struct ed_type_ofctrl_is_connected *)node->data;
     if (data->connected != ofctrl_is_connected()) {
         data->connected = !data->connected;
-        node->changed = true;
+        engine_set_node_state(node, EN_UPDATED);
         return;
     }
-    node->changed = false;
+    engine_set_node_state(node, EN_VALID);
 }
 
 struct ed_type_addr_sets {
@@ -811,7 +811,7 @@ en_addr_sets_run(struct engine_node *node)
     addr_sets_init(as_table, &as->addr_sets);
 
     as->change_tracked = false;
-    node->changed = true;
+    engine_set_node_state(node, EN_UPDATED);
 }
 
 static bool
@@ -830,11 +830,14 @@ addr_sets_sb_address_set_handler(struct engine_node *node)
     addr_sets_update(as_table, &as->addr_sets, &as->new,
                      &as->deleted, &as->updated);
 
-    node->changed = !sset_is_empty(&as->new) || !sset_is_empty(&as->deleted)
-                    || !sset_is_empty(&as->updated);
+    if (!sset_is_empty(&as->new) || !sset_is_empty(&as->deleted) ||
+            !sset_is_empty(&as->updated)) {
+        engine_set_node_state(node, EN_UPDATED);
+    } else {
+        engine_set_node_state(node, EN_VALID);
+    }
 
     as->change_tracked = true;
-    node->changed = true;
     return true;
 }
 
@@ -885,7 +888,7 @@ en_port_groups_run(struct engine_node *node)
     port_groups_init(pg_table, &pg->port_groups);
 
     pg->change_tracked = false;
-    node->changed = true;
+    engine_set_node_state(node, EN_UPDATED);
 }
 
 static bool
@@ -904,11 +907,14 @@ port_groups_sb_port_group_handler(struct engine_node *node)
     port_groups_update(pg_table, &pg->port_groups, &pg->new,
                      &pg->deleted, &pg->updated);
 
-    node->changed = !sset_is_empty(&pg->new) || !sset_is_empty(&pg->deleted)
-                    || !sset_is_empty(&pg->updated);
+    if (!sset_is_empty(&pg->new) || !sset_is_empty(&pg->deleted) ||
+            !sset_is_empty(&pg->updated)) {
+        engine_set_node_state(node, EN_UPDATED);
+    } else {
+        engine_set_node_state(node, EN_VALID);
+    }
 
     pg->change_tracked = true;
-    node->changed = true;
     return true;
 }
 
@@ -1091,7 +1097,7 @@ en_runtime_data_run(struct engine_node *node)
     update_ct_zones(local_lports, local_datapaths, ct_zones,
                     ct_zone_bitmap, pending_ct_zones);
 
-    node->changed = true;
+    engine_set_node_state(node, EN_UPDATED);
 }
 
 static bool
@@ -1157,10 +1163,10 @@ en_mff_ovn_geneve_run(struct engine_node *node)
     enum mf_field_id mff_ovn_geneve = ofctrl_get_mf_field_id();
     if (data->mff_ovn_geneve != mff_ovn_geneve) {
         data->mff_ovn_geneve = mff_ovn_geneve;
-        node->changed = true;
+        engine_set_node_state(node, EN_UPDATED);
         return;
     }
-    node->changed = false;
+    engine_set_node_state(node, EN_VALID);
 }
 
 struct ed_type_flow_output {
@@ -1322,7 +1328,7 @@ en_flow_output_run(struct engine_node *node)
                  active_tunnels,
                  flow_table);
 
-    node->changed = true;
+    engine_set_node_state(node, EN_UPDATED);
 }
 
 static bool
@@ -1404,7 +1410,7 @@ flow_output_sb_logical_flow_handler(struct engine_node *node)
               flow_table, group_table, meter_table, lfrr,
               conj_id_ofs);
 
-    node->changed = true;
+    engine_set_node_state(node, EN_UPDATED);
     return handled;
 }
 
@@ -1427,7 +1433,7 @@ flow_output_sb_mac_binding_handler(struct engine_node *node)
     lflow_handle_changed_neighbors(sbrec_port_binding_by_name,
             mac_binding_table, flow_table);
 
-    node->changed = true;
+    engine_set_node_state(node, EN_UPDATED);
     return true;
 }
 
@@ -1531,7 +1537,7 @@ flow_output_sb_port_binding_handler(struct engine_node *node)
             chassis, ct_zones, local_datapaths,
             active_tunnels, flow_table);
 
-    node->changed = true;
+    engine_set_node_state(node, EN_UPDATED);
     return true;
 }
 
@@ -1580,7 +1586,7 @@ flow_output_sb_multicast_group_handler(struct engine_node *node)
             mff_ovn_geneve, chassis, ct_zones, local_datapaths,
             flow_table);
 
-    node->changed = true;
+    engine_set_node_state(node, EN_UPDATED);
     return true;
 
 }
@@ -1694,7 +1700,9 @@ _flow_output_resource_ref_handler(struct engine_node *node,
                     conj_id_ofs, &changed)) {
             return false;
         }
-        node->changed = changed || node->changed;
+        if (changed) {
+            engine_set_node_state(node, EN_UPDATED);
+        }
     }
     SSET_FOR_EACH (ref_name, updated) {
         if (!lflow_handle_changed_ref(ref_type, ref_name,
@@ -1707,7 +1715,9 @@ _flow_output_resource_ref_handler(struct engine_node *node,
                     conj_id_ofs, &changed)) {
             return false;
         }
-        node->changed = changed || node->changed;
+        if (changed) {
+            engine_set_node_state(node, EN_UPDATED);
+        }
     }
     SSET_FOR_EACH (ref_name, new) {
         if (!lflow_handle_changed_ref(ref_type, ref_name,
@@ -1720,7 +1730,9 @@ _flow_output_resource_ref_handler(struct engine_node *node,
                     conj_id_ofs, &changed)) {
             return false;
         }
-        node->changed = changed || node->changed;
+        if (changed) {
+            engine_set_node_state(node, EN_UPDATED);
+        }
     }
 
     return true;
@@ -1941,9 +1953,6 @@ main(int argc, char *argv[])
     unixctl_command_register("inject-pkt", "MICROFLOW", 1, 1, inject_pkt,
                              &pending_pkt);
 
-    uint64_t engine_run_id = 0;
-    bool engine_run_done = true;
-
     unsigned int ovs_cond_seqno = UINT_MAX;
     unsigned int ovnsb_cond_seqno = UINT_MAX;
 
@@ -1951,7 +1960,7 @@ main(int argc, char *argv[])
     exiting = false;
     restart = false;
     while (!exiting) {
-        engine_run_id++;
+        engine_init_run();
 
         update_sb_db(ovs_idl_loop.idl, ovnsb_idl_loop.idl);
         update_ssl_config(ovsrec_ssl_table_get(ovs_idl_loop.idl));
@@ -2044,15 +2053,9 @@ main(int argc, char *argv[])
                              * this round of engine_run and continue processing
                              * acculated changes incrementally later when
                              * ofctrl_can_put() returns true. */
-                            if (engine_run_done) {
-                                engine_set_abort_recompute(true);
-                                engine_run_done = engine_run(&en_flow_output,
-                                                             engine_run_id);
-                            }
+                            engine_run(false);
                         } else {
-                            engine_set_abort_recompute(false);
-                            engine_run_done = true;
-                            engine_run(&en_flow_output, engine_run_id);
+                            engine_run(true);
                         }
                     }
                     stopwatch_stop(CONTROLLER_LOOP_STOPWATCH_NAME,
@@ -2071,7 +2074,7 @@ main(int argc, char *argv[])
                                sbrec_meter_table_get(ovnsb_idl_loop.idl),
                                get_nb_cfg(sbrec_sb_global_table_get(
                                               ovnsb_idl_loop.idl)),
-                               en_flow_output.changed);
+                               engine_node_changed(&en_flow_output));
                     pinctrl_run(ovnsb_idl_txn,
                                 sbrec_datapath_binding_by_key,
                                 sbrec_port_binding_by_datapath,
@@ -2089,7 +2092,7 @@ main(int argc, char *argv[])
                                 &ed_runtime_data.local_datapaths,
                                 &ed_runtime_data.active_tunnels);
 
-                    if (en_runtime_data.changed) {
+                    if (engine_node_changed(&en_runtime_data)) {
                         update_sb_monitors(ovnsb_idl_loop.idl, chassis,
                                            &ed_runtime_data.local_lports,
                                            &ed_runtime_data.local_datapaths);
@@ -2097,20 +2100,23 @@ main(int argc, char *argv[])
                 }
 
             }
-            if (engine_need_run(&en_flow_output, engine_run_id)) {
-                VLOG_DBG("engine did not run, force recompute next time: "
-                            "br_int %p, chassis %p", br_int, chassis);
-                engine_set_force_recompute(true);
-                poll_immediate_wake();
-            } else if (!engine_run_done) {
+
+            if (!engine_has_run()) {
+                if (engine_need_run()) {
+                    VLOG_DBG("engine did not run, force recompute next time: "
+                             "br_int %p, chassis %p", br_int, chassis);
+                    engine_set_force_recompute(true);
+                    poll_immediate_wake();
+                } else {
+                    VLOG_DBG("engine did not run, and it was not needed"
+                             " either: br_int %p, chassis %p",
+                             br_int, chassis);
+                }
+            } else if (engine_aborted()) {
                 VLOG_DBG("engine was aborted, force recompute next time: "
                          "br_int %p, chassis %p", br_int, chassis);
                 engine_set_force_recompute(true);
                 poll_immediate_wake();
-            } else if (!engine_has_run(&en_flow_output, engine_run_id)) {
-                VLOG_DBG("engine did not run, and it was not needed"
-                         " either: br_int %p, chassis %p",
-                         br_int, chassis);
             } else {
                 engine_set_force_recompute(false);
             }
@@ -2135,8 +2141,7 @@ main(int argc, char *argv[])
                     }
                 } else {
                     VLOG_DBG("Pending_pkt conn but br_int %p or chassis "
-                             "%p not ready. run-id: %"PRIu64, br_int,
-                             chassis, engine_run_id);
+                             "%p not ready.", br_int, chassis);
                     unixctl_command_reply_error(pending_pkt.conn,
                         "ovn-controller not ready.");
                 }
@@ -2185,7 +2190,7 @@ main(int argc, char *argv[])
     }
 
     engine_set_context(NULL);
-    engine_cleanup(&en_flow_output);
+    engine_cleanup();
 
     /* It's time to exit.  Clean up the databases if we are not restarting */
     if (!restart) {
