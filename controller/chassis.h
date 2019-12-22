@@ -44,6 +44,6 @@ bool chassis_get_mac(const struct sbrec_chassis *chassis,
                      struct eth_addr *chassis_mac);
 const char *chassis_get_id(void);
 const char * get_chassis_mac_mappings(const struct smap *ext_ids);
-
+void chassis_wait(void);
 
 #endif /* controller/chassis.h */

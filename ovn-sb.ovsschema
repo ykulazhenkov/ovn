@@ -1,7 +1,7 @@
 {
     "name": "OVN_Southbound",
-    "version": "2.6.0",
-    "cksum": "4271405686 21646",
+    "version": "2.7.0",
+    "cksum": "914599443 21702",
     "tables": {
         "SB_Global": {
             "columns": {
@@ -35,6 +35,7 @@
                                                     "min": 0,
                                                     "max": "unlimited"}},
                 "nb_cfg": {"type": {"key": "integer"}},
+                "ch_cfg": {"type": {"key": "integer"}},
                 "external_ids": {
                     "type": {"key": "string", "value": "string",
                              "min": 0, "max": "unlimited"}},

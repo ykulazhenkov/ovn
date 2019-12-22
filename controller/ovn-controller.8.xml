@@ -206,6 +206,14 @@
         mac with, if packet is going from a distributed router port on
         vlan type logical switch.
       </dd>
+      <dt><code>external_ids:ovn-chassis-liveliness-interval</code></dt>
+      <dd>
+        The time interval in seconds in which <code>ovn-controller</code>
+        increments the value of <ref table="Chassis" column="ch_cfg"/> column
+        of the OVN_Southbound's <ref table="Chassis" db="OVN_Southbound"/>
+        table. If the value is not set or 0, then <code>ovn-controller</code>
+        doesn't update this column.
+      </dd>
     </dl>
 
     <p>

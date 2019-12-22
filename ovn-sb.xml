@@ -262,6 +262,17 @@
       from the <ref table="SB_Global"/> table into this column.
     </column>
 
+    <column name="ch_cfg">
+      Sequence number for the chassis.  <code>ovn-controller</code>
+      increments the value of the sequence number periodically. CMS can
+      monitor this column to determine the liveliness of the chassis.
+      <code>ovn-controller</code> reads the update interval value from
+      the <ref table="Open_vSwitch"
+      column="external_ids:ovn-chassis-liveliness-interval"/> column of the
+      Open_vSwitch database's <ref table="Open_vSwitch" db="Open_vSwitch"/>
+      table.
+    </column>
+
     <column name="external_ids" key="ovn-bridge-mappings">
       <code>ovn-controller</code> populates this key with the set of bridge
       mappings it has been configured to use.  Other applications should treat

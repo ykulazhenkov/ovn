@@ -2217,6 +2217,10 @@ main(int argc, char *argv[])
                 ofctrl_wait();
                 pinctrl_wait(ovnsb_idl_txn);
             }
+
+            if (chassis) {
+                chassis_wait();
+            }
         }
 
         unixctl_server_run(unixctl);

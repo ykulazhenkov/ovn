@@ -24,6 +24,7 @@
 #include "openvswitch/dynamic-string.h"
 #include "openvswitch/vlog.h"
 #include "openvswitch/ofp-parse.h"
+#include "openvswitch/poll-loop.h"
 #include "lib/chassis-index.h"
 #include "lib/ovn-sb-idl.h"
 #include "ovn-controller.h"
@@ -47,11 +48,17 @@ struct chassis_info {
 
     /* True if Chassis SB record is initialized, false otherwise. */
     uint32_t id_inited : 1;
+
+    /* Next livelines update time to increment the 'ch_cfg' column of
+     * Chassis table. */
+    long long int next_liveliness_update;
+    int liveliness_interval;
 };
 
 static struct chassis_info chassis_state = {
     .id = DS_EMPTY_INITIALIZER,
     .id_inited = false,
+    .next_liveliness_update = LLONG_MAX,
 };
 
 static void
@@ -85,6 +92,7 @@ struct ovs_chassis_cfg {
     const char *encap_csum;
     const char *cms_options;
     const char *chassis_macs;
+    const char *liveliness_interval;
 
     /* Set of encap types parsed from the 'ovn-encap-type' external-id. */
     struct sset encap_type_set;
@@ -172,6 +180,12 @@ get_datapath_type(const struct ovsrec_bridge *br_int)
     return "";
 }
 
+static const char *
+get_chassis_liveliness_interval(const struct smap *ext_ids)
+{
+    return smap_get_def(ext_ids, "ovn-chassis-liveliness-interval", "");
+}
+
 static void
 update_chassis_transport_zones(const struct sset *transport_zones,
                                const struct sbrec_chassis *chassis_rec)
@@ -245,7 +259,8 @@ chassis_parse_ovs_iface_types(char **iface_types, size_t n_iface_types,
 static bool
 chassis_parse_ovs_config(const struct ovsrec_open_vswitch_table *ovs_table,
                          const struct ovsrec_bridge *br_int,
-                         struct ovs_chassis_cfg *ovs_cfg)
+                         struct ovs_chassis_cfg *ovs_cfg,
+                         struct chassis_info *ch_info)
 {
     const struct ovsrec_open_vswitch *cfg =
         ovsrec_open_vswitch_table_first(ovs_table);
@@ -268,6 +283,17 @@ chassis_parse_ovs_config(const struct ovsrec_open_vswitch_table *ovs_table,
     ovs_cfg->encap_csum = get_encap_csum(&cfg->external_ids);
     ovs_cfg->cms_options = get_cms_options(&cfg->external_ids);
     ovs_cfg->chassis_macs = get_chassis_mac_mappings(&cfg->external_ids);
+    ovs_cfg->liveliness_interval =
+        get_chassis_liveliness_interval(&cfg->external_ids);
+
+    int live_interval;
+    if (str_to_int(ovs_cfg->liveliness_interval, 10, &live_interval)) {
+        live_interval *= 1000;
+        if (ch_info->liveliness_interval != live_interval) {
+            ch_info->liveliness_interval = live_interval;
+            ch_info->next_liveliness_update = LLONG_MAX;
+        }
+    }
 
     if (!chassis_parse_ovs_encap_type(encap_type, &ovs_cfg->encap_type_set)) {
         return false;
@@ -291,13 +317,16 @@ chassis_parse_ovs_config(const struct ovsrec_open_vswitch_table *ovs_table,
 static void
 chassis_build_external_ids(struct smap *ext_ids, const char *bridge_mappings,
                            const char *datapath_type, const char *cms_options,
-                           const char *chassis_macs, const char *iface_types)
+                           const char *chassis_macs, const char *iface_types,
+                           const char *liveliness_interval)
 {
     smap_replace(ext_ids, "ovn-bridge-mappings", bridge_mappings);
     smap_replace(ext_ids, "datapath-type", datapath_type);
     smap_replace(ext_ids, "ovn-cms-options", cms_options);
     smap_replace(ext_ids, "iface-types", iface_types);
     smap_replace(ext_ids, "ovn-chassis-mac-mappings", chassis_macs);
+    smap_replace(ext_ids, "ovn-chassis-liveliness-interval",
+                 liveliness_interval);
 }
 
 /*
@@ -309,6 +338,7 @@ chassis_external_ids_changed(const char *bridge_mappings,
                              const char *cms_options,
                              const char *chassis_macs,
                              const struct ds *iface_types,
+                             const char *liveliness_interval,
                              const struct sbrec_chassis *chassis_rec)
 {
     const char *chassis_bridge_mappings =
@@ -342,6 +372,13 @@ chassis_external_ids_changed(const char *bridge_mappings,
         smap_get_def(&chassis_rec->external_ids, "iface-types", "");
 
     if (strcmp(ds_cstr_ro(iface_types), chassis_iface_types)) {
+        return true;
+    }
+
+    const char *chassis_liveliness_interval =
+        get_chassis_liveliness_interval(&chassis_rec->external_ids);
+
+    if (strcmp(liveliness_interval, chassis_liveliness_interval)) {
         return true;
     }
 
@@ -524,6 +561,7 @@ chassis_update(const struct sbrec_chassis *chassis_rec,
                                      ovs_cfg->cms_options,
                                      ovs_cfg->chassis_macs,
                                      &ovs_cfg->iface_types,
+                                     ovs_cfg->liveliness_interval,
                                      chassis_rec)) {
         struct smap ext_ids;
 
@@ -532,7 +570,8 @@ chassis_update(const struct sbrec_chassis *chassis_rec,
                                    ovs_cfg->datapath_type,
                                    ovs_cfg->cms_options,
                                    ovs_cfg->chassis_macs,
-                                   ds_cstr_ro(&ovs_cfg->iface_types));
+                                   ds_cstr_ro(&ovs_cfg->iface_types),
+                                   ovs_cfg->liveliness_interval);
         sbrec_chassis_verify_external_ids(chassis_rec);
         sbrec_chassis_set_external_ids(chassis_rec, &ext_ids);
         smap_destroy(&ext_ids);
@@ -560,6 +599,18 @@ chassis_update(const struct sbrec_chassis *chassis_rec,
     free(encaps);
 }
 
+static void
+chassis_update_liveliness_cfg(const struct sbrec_chassis *chassis_rec,
+                              struct chassis_info *ch_info)
+{
+    if (ch_info->next_liveliness_update == LLONG_MAX ||
+        time_msec() > ch_info->next_liveliness_update) {
+        sbrec_chassis_set_ch_cfg(chassis_rec, chassis_rec->ch_cfg + 1);
+        ch_info->next_liveliness_update =
+            time_msec() + ch_info->liveliness_interval;
+    }
+}
+
 /* Returns this chassis's Chassis record, if it is available. */
 const struct sbrec_chassis *
 chassis_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
@@ -574,7 +625,8 @@ chassis_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
 
     /* Get the chassis config from the ovs table. */
     ovs_chassis_cfg_init(&ovs_cfg);
-    if (!chassis_parse_ovs_config(ovs_table, br_int, &ovs_cfg)) {
+    if (!chassis_parse_ovs_config(ovs_table, br_int, &ovs_cfg,
+                                  &chassis_state)) {
         return NULL;
     }
 
@@ -590,6 +642,9 @@ chassis_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
         chassis_update(chassis_rec, ovnsb_idl_txn, &ovs_cfg, chassis_id,
                        transport_zones);
         chassis_info_set_id(&chassis_state, chassis_id);
+        if (chassis_state.liveliness_interval) {
+            chassis_update_liveliness_cfg(chassis_rec, &chassis_state);
+        }
         ovsdb_idl_txn_add_comment(ovnsb_idl_txn,
                                   "ovn-controller: registering chassis '%s'",
                                   chassis_id);
@@ -673,4 +728,10 @@ chassis_get_id(void)
     }
 
     return NULL;
+}
+
+void chassis_wait(void) {
+    if (chassis_state.liveliness_interval) {
+        poll_timer_wait_until(chassis_state.next_liveliness_update);
+    }
 }
