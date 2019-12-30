@@ -1333,6 +1333,7 @@ en_ct_zones_cleanup(void *data)
 static void
 en_ct_zones_run(struct engine_node *node, void *data)
 {
+    VLOG_INFO("SIDNUM : %s : %s : %d entered", __FILE__, __FUNCTION__, __LINE__);
     struct ed_type_ct_zones *ct_zones_data = data;
     struct ed_type_runtime_data *rt_data =
         engine_get_input_data("runtime_data", node);
@@ -1429,6 +1430,75 @@ struct ed_type_flow_output {
     struct lflow_resource_ref lflow_resource_ref;
 };
 
+static void init_physical_ctx(struct engine_node *node,
+                              struct ed_type_runtime_data *rt_data,
+                              struct ovn_desired_flow_table *flow_table,
+                              struct physical_ctx *p_ctx)
+{
+    struct ovsdb_idl_index *sbrec_port_binding_by_name =
+        engine_ovsdb_node_get_index(
+                engine_get_input("SB_port_binding", node),
+                "name");
+
+    struct sbrec_multicast_group_table *multicast_group_table =
+        (struct sbrec_multicast_group_table *)EN_OVSDB_GET(
+            engine_get_input("SB_multicast_group", node));
+
+    struct sbrec_port_binding_table *port_binding_table =
+        (struct sbrec_port_binding_table *)EN_OVSDB_GET(
+            engine_get_input("SB_port_binding", node));
+
+    struct sbrec_chassis_table *chassis_table =
+        (struct sbrec_chassis_table *)EN_OVSDB_GET(
+            engine_get_input("SB_chassis", node));
+
+    struct ed_type_mff_ovn_geneve *ed_mff_ovn_geneve =
+        engine_get_input_data("mff_ovn_geneve", node);
+
+    struct ovsrec_open_vswitch_table *ovs_table =
+        (struct ovsrec_open_vswitch_table *)EN_OVSDB_GET(
+            engine_get_input("OVS_open_vswitch", node));
+    struct ovsrec_bridge_table *bridge_table =
+        (struct ovsrec_bridge_table *)EN_OVSDB_GET(
+            engine_get_input("OVS_bridge", node));
+    const struct ovsrec_bridge *br_int = get_br_int(bridge_table, ovs_table);
+    const char *chassis_id = chassis_get_id();
+    const struct sbrec_chassis *chassis = NULL;
+    struct ovsdb_idl_index *sbrec_chassis_by_name =
+        engine_ovsdb_node_get_index(
+                engine_get_input("SB_chassis", node),
+                "name");
+    if (chassis_id) {
+        chassis = chassis_lookup_by_name(sbrec_chassis_by_name, chassis_id);
+    }
+
+    ovs_assert(br_int && chassis);
+
+    struct ovsrec_interface_table *iface_table =
+        (struct ovsrec_interface_table *)EN_OVSDB_GET(
+            engine_get_input("OVS_interface", node));
+
+    struct ed_type_ct_zones *ct_zones_data =
+        engine_get_input_data("ct_zones", node);
+    struct simap *ct_zones = &ct_zones_data->current;
+
+    p_ctx->ovnsb_idl_txn = engine_get_context()->ovnsb_idl_txn;
+    p_ctx->ovs_idl_txn = engine_get_context()->ovs_idl_txn;
+    p_ctx->sbrec_port_binding_by_name = sbrec_port_binding_by_name;
+    p_ctx->port_binding_table = port_binding_table;
+    p_ctx->mc_group_table = multicast_group_table;
+    p_ctx->br_int = br_int;
+    p_ctx->chassis_table = chassis_table;
+    p_ctx->chassis = chassis;
+    p_ctx->iface_table = iface_table;
+    p_ctx->flow_table = flow_table;
+    p_ctx->active_tunnels = &rt_data->active_tunnels;
+    p_ctx->local_datapaths = &rt_data->local_datapaths;
+    p_ctx->local_lports = &rt_data->local_lports;
+    p_ctx->ct_zones = ct_zones;
+    p_ctx->mff_ovn_geneve = ed_mff_ovn_geneve->mff_ovn_geneve;
+}
+
 static void *
 en_flow_output_init(struct engine_node *node OVS_UNUSED,
                     struct engine_arg *arg OVS_UNUSED)
@@ -1456,34 +1526,13 @@ en_flow_output_cleanup(void *data)
 static void
 en_flow_output_run(struct engine_node *node, void *data)
 {
+    VLOG_INFO("SIDNUM : %s : %s : %d entered", __FILE__, __FUNCTION__, __LINE__);
     struct ed_type_runtime_data *rt_data =
         engine_get_input_data("runtime_data", node);
     struct hmap *local_datapaths = &rt_data->local_datapaths;
-    struct sset *local_lports = &rt_data->local_lports;
     struct sset *local_lport_ids = &rt_data->local_lport_ids;
     struct sset *active_tunnels = &rt_data->active_tunnels;
 
-    struct ed_type_ct_zones *ct_zones_data =
-        engine_get_input_data("ct_zones", node);
-    struct simap *ct_zones = &ct_zones_data->current;
-
-    struct ed_type_mff_ovn_geneve *ed_mff_ovn_geneve =
-        engine_get_input_data("mff_ovn_geneve", node);
-    enum mf_field_id mff_ovn_geneve = ed_mff_ovn_geneve->mff_ovn_geneve;
-
-    struct ovsrec_open_vswitch_table *ovs_table =
-        (struct ovsrec_open_vswitch_table *)EN_OVSDB_GET(
-            engine_get_input("OVS_open_vswitch", node));
-    struct ovsrec_bridge_table *bridge_table =
-        (struct ovsrec_bridge_table *)EN_OVSDB_GET(
-            engine_get_input("OVS_bridge", node));
-    const struct ovsrec_bridge *br_int = get_br_int(bridge_table, ovs_table);
-    const char *chassis_id = chassis_get_id();
-
-    struct ovsdb_idl_index *sbrec_chassis_by_name =
-        engine_ovsdb_node_get_index(
-                engine_get_input("SB_chassis", node),
-                "name");
     struct ed_type_addr_sets *as_data =
         engine_get_input_data("addr_sets", node);
     struct shash *addr_sets = &as_data->addr_sets;
@@ -1492,19 +1541,15 @@ en_flow_output_run(struct engine_node *node, void *data)
         engine_get_input_data("port_groups", node);
     struct shash *port_groups = &pg_data->port_groups;
 
-    const struct sbrec_chassis *chassis = NULL;
-    if (chassis_id) {
-        chassis = chassis_lookup_by_name(sbrec_chassis_by_name, chassis_id);
-    }
-
-    ovs_assert(br_int && chassis);
-
     struct ed_type_flow_output *fo = data;
     struct ovn_desired_flow_table *flow_table = &fo->flow_table;
     struct ovn_extend_table *group_table = &fo->group_table;
     struct ovn_extend_table *meter_table = &fo->meter_table;
     uint32_t *conj_id_ofs = &fo->conj_id_ofs;
     struct lflow_resource_ref *lfrr = &fo->lflow_resource_ref;
+
+    struct physical_ctx p_ctx;
+    init_physical_ctx(node, rt_data, flow_table, &p_ctx);
 
     static bool first_run = true;
     if (first_run) {
@@ -1520,11 +1565,6 @@ en_flow_output_run(struct engine_node *node, void *data)
         engine_ovsdb_node_get_index(
                 engine_get_input("SB_multicast_group", node),
                 "name_datapath");
-
-    struct ovsdb_idl_index *sbrec_port_binding_by_name =
-        engine_ovsdb_node_get_index(
-                engine_get_input("SB_port_binding", node),
-                "name");
 
     struct sbrec_dhcp_options_table *dhcp_table =
         (struct sbrec_dhcp_options_table *)EN_OVSDB_GET(
@@ -1544,36 +1584,16 @@ en_flow_output_run(struct engine_node *node, void *data)
 
     *conj_id_ofs = 1;
     lflow_run(sbrec_multicast_group_by_name_datapath,
-              sbrec_port_binding_by_name,
+              p_ctx.sbrec_port_binding_by_name,
               dhcp_table, dhcpv6_table,
               datapath_binding_table,
               mac_binding_table,
-              chassis, local_datapaths, addr_sets,
+              p_ctx.chassis, local_datapaths, addr_sets,
               port_groups, active_tunnels, local_lport_ids,
               flow_table, group_table, meter_table, lfrr,
               conj_id_ofs);
 
-    struct sbrec_multicast_group_table *multicast_group_table =
-        (struct sbrec_multicast_group_table *)EN_OVSDB_GET(
-            engine_get_input("SB_multicast_group", node));
-
-    struct sbrec_port_binding_table *port_binding_table =
-        (struct sbrec_port_binding_table *)EN_OVSDB_GET(
-            engine_get_input("SB_port_binding", node));
-
-    struct sbrec_chassis_table *chassis_table =
-        (struct sbrec_chassis_table *)EN_OVSDB_GET(
-            engine_get_input("SB_chassis", node));
-
-    physical_run(sbrec_port_binding_by_name,
-                 multicast_group_table,
-                 port_binding_table,
-                 chassis_table,
-                 mff_ovn_geneve,
-                 br_int, chassis, ct_zones,
-                 local_datapaths, local_lports,
-                 active_tunnels,
-                 flow_table);
+    physical_run(&p_ctx);
 
     engine_set_node_state(node, EN_UPDATED);
 }
@@ -1699,16 +1719,6 @@ flow_output_sb_port_binding_handler(struct engine_node *node, void *data)
 {
     struct ed_type_runtime_data *rt_data =
         engine_get_input_data("runtime_data", node);
-    struct hmap *local_datapaths = &rt_data->local_datapaths;
-    struct sset *active_tunnels = &rt_data->active_tunnels;
-
-    struct ed_type_ct_zones *ct_zones_data =
-        engine_get_input_data("ct_zones", node);
-    struct simap *ct_zones = &ct_zones_data->current;
-
-    struct ed_type_mff_ovn_geneve *ed_mff_ovn_geneve =
-        engine_get_input_data("mff_ovn_geneve", node);
-    enum mf_field_id mff_ovn_geneve = ed_mff_ovn_geneve->mff_ovn_geneve;
 
     struct ovsrec_open_vswitch_table *ovs_table =
         (struct ovsrec_open_vswitch_table *)EN_OVSDB_GET(
@@ -1731,15 +1741,6 @@ flow_output_sb_port_binding_handler(struct engine_node *node, void *data)
 
     struct ed_type_flow_output *fo = data;
     struct ovn_desired_flow_table *flow_table = &fo->flow_table;
-
-    struct ovsdb_idl_index *sbrec_port_binding_by_name =
-        engine_ovsdb_node_get_index(
-                engine_get_input("SB_port_binding", node),
-                "name");
-
-    struct sbrec_port_binding_table *port_binding_table =
-        (struct sbrec_port_binding_table *)EN_OVSDB_GET(
-            engine_get_input("SB_port_binding", node));
 
     /* XXX: now we handle port-binding changes for physical flow processing
      * only, but port-binding change can have impact to logical flow
@@ -1788,12 +1789,10 @@ flow_output_sb_port_binding_handler(struct engine_node *node, void *data)
      * names and the lflows that uses them, and reprocess the related lflows
      * when related port-bindings change.
      */
-    physical_handle_port_binding_changes(
-            sbrec_port_binding_by_name,
-            port_binding_table, mff_ovn_geneve,
-            chassis, ct_zones, local_datapaths,
-            active_tunnels, flow_table);
+    struct physical_ctx p_ctx;
+    init_physical_ctx(node, rt_data, flow_table, &p_ctx);
 
+    physical_handle_port_binding_changes(&p_ctx);
     engine_set_node_state(node, EN_UPDATED);
     return true;
 }
@@ -1805,23 +1804,7 @@ flow_output_sb_multicast_group_handler(struct engine_node *node, void *data)
         engine_get_input_data("runtime_data", node);
     struct hmap *local_datapaths = &rt_data->local_datapaths;
 
-    struct ed_type_ct_zones *ct_zones_data =
-        engine_get_input_data("ct_zones", node);
-    struct simap *ct_zones = &ct_zones_data->current;
-
-    struct ed_type_mff_ovn_geneve *ed_mff_ovn_geneve =
-        engine_get_input_data("mff_ovn_geneve", node);
-    enum mf_field_id mff_ovn_geneve = ed_mff_ovn_geneve->mff_ovn_geneve;
-
-    struct ovsrec_open_vswitch_table *ovs_table =
-        (struct ovsrec_open_vswitch_table *)EN_OVSDB_GET(
-            engine_get_input("OVS_open_vswitch", node));
-    struct ovsrec_bridge_table *bridge_table =
-        (struct ovsrec_bridge_table *)EN_OVSDB_GET(
-            engine_get_input("OVS_bridge", node));
-    const struct ovsrec_bridge *br_int = get_br_int(bridge_table, ovs_table);
     const char *chassis_id = chassis_get_id();
-
     struct ovsdb_idl_index *sbrec_chassis_by_name =
         engine_ovsdb_node_get_index(
                 engine_get_input("SB_chassis", node),
@@ -1830,7 +1813,7 @@ flow_output_sb_multicast_group_handler(struct engine_node *node, void *data)
     if (chassis_id) {
         chassis = chassis_lookup_by_name(sbrec_chassis_by_name, chassis_id);
     }
-    ovs_assert(br_int && chassis);
+    ovs_assert(chassis);
 
     struct ed_type_flow_output *fo = data;
     struct ovn_desired_flow_table *flow_table = &fo->flow_table;
@@ -1839,9 +1822,10 @@ flow_output_sb_multicast_group_handler(struct engine_node *node, void *data)
         (struct sbrec_multicast_group_table *)EN_OVSDB_GET(
             engine_get_input("SB_multicast_group", node));
 
-    physical_handle_mc_group_changes(multicast_group_table,
-            mff_ovn_geneve, chassis, ct_zones, local_datapaths,
-            flow_table);
+    struct physical_ctx p_ctx;
+    init_physical_ctx(node, rt_data, flow_table, &p_ctx);
+
+    physical_handle_mc_group_changes(&p_ctx);
 
     struct ovn_extend_table *group_table = &fo->group_table;
     struct ovn_extend_table *meter_table = &fo->meter_table;
@@ -2047,6 +2031,21 @@ flow_output_port_groups_handler(struct engine_node *node, void *data)
     return _flow_output_resource_ref_handler(node, data, REF_TYPE_PORTGROUP);
 }
 
+static bool
+flow_output_ovs_interface_handler(struct engine_node *node, void *data OVS_UNUSED)
+{
+    struct ed_type_runtime_data *rt_data =
+        engine_get_input_data("runtime_data", node);
+
+    struct ed_type_flow_output *fo = data;
+    struct physical_ctx p_ctx;
+
+    init_physical_ctx(node, rt_data, &fo->flow_table, &p_ctx);
+    physical_handle_ovs_interface_changes(&p_ctx);
+    engine_set_node_state(node, EN_VALID);
+    return true;
+}
+
 #if 0
 static bool
 flow_output_data_open_vswitch_handler(struct engine_node *node OVS_UNUSED)
@@ -2221,11 +2220,14 @@ main(int argc, char *argv[])
                      flow_output_port_groups_handler);
     engine_add_input(&en_flow_output, &en_runtime_data, NULL);
     engine_add_input(&en_flow_output, &en_ct_zones, NULL);
+
     engine_add_input(&en_flow_output, &en_mff_ovn_geneve, NULL);
 
     engine_add_input(&en_flow_output, &en_ovs_open_vswitch,
                      NULL);
     engine_add_input(&en_flow_output, &en_ovs_bridge, NULL);
+    engine_add_input(&en_flow_output, &en_ovs_interface,
+                     flow_output_ovs_interface_handler);
 
     engine_add_input(&en_flow_output, &en_sb_chassis, NULL);
     engine_add_input(&en_flow_output, &en_sb_encap, NULL);
