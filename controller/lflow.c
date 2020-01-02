@@ -296,6 +296,7 @@ add_logical_flows(struct lflow_ctx *l_ctx)
 bool
 lflow_handle_changed_flows(struct lflow_ctx *l_ctx)
 {
+    VLOG_INFO("NUMS :  %s : %s : %d : entering", __FILE__, __FUNCTION__, __LINE__);
     bool ret = true;
     const struct sbrec_datapath_logical_flow *lflow;
 
@@ -369,6 +370,7 @@ lflow_handle_changed_flows(struct lflow_ctx *l_ctx)
     dhcp_opts_destroy(&dhcpv6_opts);
     nd_ra_opts_destroy(&nd_ra_opts);
     controller_event_opts_destroy(&controller_event_opts);
+    VLOG_INFO("NUMS :  %s : %s : %d : exiting", __FILE__, __FUNCTION__, __LINE__);
     return ret;
 }
 
@@ -376,6 +378,7 @@ bool
 lflow_handle_changed_ref(struct lflow_ctx *l_ctx, enum ref_type ref_type,
                          const char *ref_name, bool *changed)
 {
+    VLOG_INFO("NUMS :  %s : %s : %d : entering", __FILE__, __FUNCTION__, __LINE__);
     struct ref_lflow_node *rlfn = ref_lflow_lookup(&l_ctx->lfrr->ref_lflow_table,
                                                    ref_type, ref_name);
     if (!rlfn) {
@@ -464,6 +467,7 @@ lflow_handle_changed_ref(struct lflow_ctx *l_ctx, enum ref_type ref_type,
     dhcp_opts_destroy(&dhcpv6_opts);
     nd_ra_opts_destroy(&nd_ra_opts);
     controller_event_opts_destroy(&controller_event_opts);
+    VLOG_INFO("NUMS :  %s : %s : %d : exiting", __FILE__, __FUNCTION__, __LINE__);
     return ret;
 }
 
@@ -779,6 +783,7 @@ lflow_handle_changed_neighbors(
     const struct sbrec_mac_binding_table *mac_binding_table,
     struct ovn_desired_flow_table *flow_table)
 {
+    VLOG_INFO("NUMS :  %s : %s : %d : entering", __FILE__, __FUNCTION__, __LINE__);
     const struct sbrec_mac_binding *mb;
     /* Handle deleted mac_bindings first, to avoid *duplicated flow* problem
      * when same flow needs to be added. */
@@ -802,12 +807,14 @@ lflow_handle_changed_neighbors(
             consider_neighbor_flow(sbrec_port_binding_by_name, mb, flow_table);
         }
     }
+    VLOG_INFO("NUMS :  %s : %s : %d : exiting", __FILE__, __FUNCTION__, __LINE__);
 }
 
 
 bool
 lflow_handle_mc_group_changes(struct lflow_ctx *l_ctx)
 {
+    VLOG_INFO("NUMS :  %s : %s : %d : entered", __FILE__, __FUNCTION__, __LINE__);
     struct hmap dhcp_opts = HMAP_INITIALIZER(&dhcp_opts);
     struct hmap dhcpv6_opts = HMAP_INITIALIZER(&dhcpv6_opts);
     const struct sbrec_dhcp_options *dhcp_opt_row;
@@ -854,7 +861,83 @@ lflow_handle_mc_group_changes(struct lflow_ctx *l_ctx)
     dhcp_opts_destroy(&dhcpv6_opts);
     nd_ra_opts_destroy(&nd_ra_opts);
     controller_event_opts_destroy(&controller_event_opts);
+    VLOG_INFO("NUMS :  %s : %s : %d : exiting", __FILE__, __FUNCTION__, __LINE__);
     return true;
+}
+
+bool
+lflow_handle_port_binding_changes(struct lflow_ctx *l_ctx)
+{
+    VLOG_INFO("NUMS :  %s : %s : %d : entering", __FILE__, __FUNCTION__, __LINE__);
+    bool changed = false;
+    const struct sbrec_port_binding *pb;
+    struct hmap datapaths = HMAP_INITIALIZER(&datapaths);
+    struct datapath_node {
+        struct hmap_node node;
+        const struct sbrec_datapath_binding *dp;
+    };
+
+    SBREC_PORT_BINDING_TABLE_FOR_EACH_TRACKED (pb, l_ctx->port_binding_table) {
+        if (!hmap_first_with_hash(&datapaths, pb->datapath->tunnel_key)) {
+            struct datapath_node *dp_node = xmalloc(sizeof *dp_node);
+            dp_node->dp = pb->datapath;
+            hmap_insert(&datapaths, &dp_node->node, pb->datapath->tunnel_key);
+        }
+    }
+
+    struct hmap dhcp_opts = HMAP_INITIALIZER(&dhcp_opts);
+    struct hmap dhcpv6_opts = HMAP_INITIALIZER(&dhcpv6_opts);
+    const struct sbrec_dhcp_options *dhcp_opt_row;
+    SBREC_DHCP_OPTIONS_TABLE_FOR_EACH (dhcp_opt_row,
+                                       l_ctx->dhcp_options_table) {
+        dhcp_opt_add(&dhcp_opts, dhcp_opt_row->name, dhcp_opt_row->code,
+                     dhcp_opt_row->type);
+    }
+
+    const struct sbrec_dhcpv6_options *dhcpv6_opt_row;
+    SBREC_DHCPV6_OPTIONS_TABLE_FOR_EACH (dhcpv6_opt_row,
+                                         l_ctx->dhcpv6_options_table) {
+       dhcp_opt_add(&dhcpv6_opts, dhcpv6_opt_row->name, dhcpv6_opt_row->code,
+                    dhcpv6_opt_row->type);
+    }
+
+    struct hmap nd_ra_opts = HMAP_INITIALIZER(&nd_ra_opts);
+    nd_ra_opts_init(&nd_ra_opts);
+
+    struct controller_event_options controller_event_opts;
+    controller_event_opts_init(&controller_event_opts);
+
+    struct datapath_node *dp_node;
+    HMAP_FOR_EACH_POP (dp_node, node, &datapaths) {
+        if (!get_local_datapath(l_ctx->local_datapaths,
+                                dp_node->dp->tunnel_key)) {
+            continue;
+        }
+
+        for (size_t i = 0; i < dp_node->dp->n_flows; i++) {
+            changed = true;
+            VLOG_INFO("NUMS :  %s : %s : %d : calling consider_lflow for [%s]", __FILE__, __FUNCTION__, __LINE__, smap_get(&dp_node->dp->external_ids, "name"));
+            if (!consider_logical_flow(l_ctx,
+                                       dp_node->dp->flows[i], dp_node->dp,
+                                       &dhcp_opts, &dhcpv6_opts,
+                                       &nd_ra_opts, &controller_event_opts)) {
+                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
+                VLOG_ERR_RL(&rl, "Conjunction id overflow when processing "
+                            "lflow " UUID_FMT,
+                            UUID_ARGS(&dp_node->dp->flows[i]->header_.uuid));
+            }
+        }
+
+        free (dp_node);
+    }
+
+    hmap_destroy(&datapaths);
+    dhcp_opts_destroy(&dhcp_opts);
+    dhcp_opts_destroy(&dhcpv6_opts);
+    nd_ra_opts_destroy(&nd_ra_opts);
+    controller_event_opts_destroy(&controller_event_opts);
+    VLOG_INFO("NUMS :  %s : %s : %d : exiting", __FILE__, __FUNCTION__, __LINE__);
+    return changed;
 }
 
 /* Translates logical flows in the Logical_Flow table in the OVN_SB database
@@ -862,10 +945,12 @@ lflow_handle_mc_group_changes(struct lflow_ctx *l_ctx)
 void
 lflow_run(struct lflow_ctx *l_ctx)
 {
+    VLOG_INFO("NUMS :  %s : %s : %d : entering", __FILE__, __FUNCTION__, __LINE__);
     COVERAGE_INC(lflow_run);
     add_logical_flows(l_ctx);
     add_neighbor_flows(l_ctx->sbrec_port_binding_by_name, l_ctx->mac_binding_table,
                        l_ctx->flow_table);
+    VLOG_INFO("NUMS :  %s : %s : %d : exiting", __FILE__, __FUNCTION__, __LINE__);
 }
 
 void

@@ -124,6 +124,7 @@ struct lflow_ctx {
     const struct sbrec_dhcpv6_options_table *dhcpv6_options_table;
     const struct sbrec_datapath_binding_table *dp_binding_table;
     const struct sbrec_mac_binding_table *mac_binding_table;
+    const struct sbrec_port_binding_table *port_binding_table;
     const struct sbrec_datapath_logical_flow_table *dp_flow_table;
     const struct sbrec_multicast_group_table *mc_group_table;
     const struct sbrec_chassis *chassis;
@@ -152,6 +153,7 @@ void lflow_handle_changed_neighbors(
     struct ovn_desired_flow_table *);
 
 bool lflow_handle_mc_group_changes(struct lflow_ctx *l_ctx);
+bool lflow_handle_port_binding_changes(struct lflow_ctx *l_ctx);
 
 void lflow_destroy(void);
 
