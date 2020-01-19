@@ -18,6 +18,7 @@
 
 #include "pinctrl.h"
 
+#include "binding.h"
 #include "coverage.h"
 #include "csum.h"
 #include "dirs.h"
@@ -278,7 +279,8 @@ static void run_put_vport_bindings(
     struct ovsdb_idl_txn *ovnsb_idl_txn,
     struct ovsdb_idl_index *sbrec_datapath_binding_by_key,
     struct ovsdb_idl_index *sbrec_port_binding_by_key,
-    const struct sbrec_chassis *chassis)
+    const struct sbrec_chassis *chassis,
+    struct shash *local_bindings)
     OVS_REQUIRES(pinctrl_mutex);
 static void wait_put_vport_bindings(struct ovsdb_idl_txn *ovnsb_idl_txn);
 static void pinctrl_handle_bind_vport(const struct flow *md,
@@ -2174,7 +2176,8 @@ pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
             const struct ovsrec_bridge *br_int,
             const struct sbrec_chassis *chassis,
             const struct hmap *local_datapaths,
-            const struct sset *active_tunnels)
+            const struct sset *active_tunnels,
+            struct shash *local_bindings)
 {
     ovs_mutex_lock(&pinctrl_mutex);
     if (br_int && (!pinctrl.br_int_name || strcmp(pinctrl.br_int_name,
@@ -2191,7 +2194,7 @@ pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
                          sbrec_port_binding_by_key,
                          sbrec_mac_binding_by_lport_ip);
     run_put_vport_bindings(ovnsb_idl_txn, sbrec_datapath_binding_by_key,
-                           sbrec_port_binding_by_key, chassis);
+                           sbrec_port_binding_by_key, chassis, local_bindings);
     send_garp_rarp_prepare(sbrec_port_binding_by_datapath,
                            sbrec_port_binding_by_name, br_int, chassis,
                            local_datapaths, active_tunnels);
@@ -4860,7 +4863,8 @@ run_put_vport_binding(struct ovsdb_idl_txn *ovnsb_idl_txn OVS_UNUSED,
                       struct ovsdb_idl_index *sbrec_datapath_binding_by_key,
                       struct ovsdb_idl_index *sbrec_port_binding_by_key,
                       const struct sbrec_chassis *chassis,
-                      const struct put_vport_binding *vpb)
+                      const struct put_vport_binding *vpb,
+                      struct shash *local_bindings)
 {
     /* Convert logical datapath and logical port key into lport. */
     const struct sbrec_port_binding *pb = lport_lookup_by_key(
@@ -4885,6 +4889,7 @@ run_put_vport_binding(struct ovsdb_idl_txn *ovnsb_idl_txn OVS_UNUSED,
                        pb->logical_port, parent->logical_port);
             sbrec_port_binding_set_chassis(pb, chassis);
             sbrec_port_binding_set_virtual_parent(pb, parent->logical_port);
+            binding_add_vport_to_local_bindings(local_bindings, parent, pb);
         }
     }
 }
@@ -4895,7 +4900,8 @@ static void
 run_put_vport_bindings(struct ovsdb_idl_txn *ovnsb_idl_txn,
                       struct ovsdb_idl_index *sbrec_datapath_binding_by_key,
                       struct ovsdb_idl_index *sbrec_port_binding_by_key,
-                      const struct sbrec_chassis *chassis)
+                      const struct sbrec_chassis *chassis,
+                      struct shash *local_bindings)
     OVS_REQUIRES(pinctrl_mutex)
 {
     if (!ovnsb_idl_txn) {
@@ -4905,7 +4911,8 @@ run_put_vport_bindings(struct ovsdb_idl_txn *ovnsb_idl_txn,
     const struct put_vport_binding *vpb;
     HMAP_FOR_EACH (vpb, hmap_node, &put_vport_bindings) {
         run_put_vport_binding(ovnsb_idl_txn, sbrec_datapath_binding_by_key,
-                              sbrec_port_binding_by_key, chassis, vpb);
+                              sbrec_port_binding_by_key, chassis, vpb,
+                              local_bindings);
     }
 
     flush_put_vport_bindings();
