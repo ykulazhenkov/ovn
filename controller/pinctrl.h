@@ -31,6 +31,7 @@ struct sbrec_chassis;
 struct sbrec_dns_table;
 struct sbrec_controller_event_table;
 struct sbrec_service_monitor_table;
+struct shash;
 
 void pinctrl_init(void);
 void pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
@@ -46,7 +47,8 @@ void pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
                  const struct sbrec_service_monitor_table *,
                  const struct ovsrec_bridge *, const struct sbrec_chassis *,
                  const struct hmap *local_datapaths,
-                 const struct sset *active_tunnels);
+                 const struct sset *active_tunnels,
+                 struct shash *local_bindings);
 void pinctrl_wait(struct ovsdb_idl_txn *ovnsb_idl_txn);
 void pinctrl_destroy(void);
 
