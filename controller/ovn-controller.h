@@ -72,6 +72,28 @@ struct local_datapath {
 struct local_datapath *get_local_datapath(const struct hmap *,
                                           uint32_t tunnel_key);
 
+enum local_binding_type {
+    BT_VIF,
+    BT_CHILD,
+    BT_VIRTUAL
+};
+
+struct local_binding {
+    struct ovs_list node;       /* In parent if any. */
+    char *name;
+    enum local_binding_type type;
+    const struct ovsrec_interface *iface;
+    const struct sbrec_port_binding *pb;
+
+    struct ovs_list children;
+};
+
+static inline struct local_binding *
+local_binding_find(struct shash *local_bindings, const char *name)
+{
+    return shash_find_data(local_bindings, name);
+}
+
 const struct ovsrec_bridge *get_bridge(const struct ovsrec_bridge_table *,
                                        const char *br_name);
 
