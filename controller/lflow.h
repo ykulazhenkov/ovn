@@ -48,6 +48,7 @@ struct sbrec_dhcp_options_table;
 struct sbrec_dhcpv6_options_table;
 struct sbrec_logical_flow_table;
 struct sbrec_mac_binding_table;
+struct sbrec_port_binding_table;
 struct simap;
 struct sset;
 struct uuid;
@@ -153,6 +154,7 @@ void lflow_handle_changed_neighbors(
     const struct hmap *local_datapaths,
     struct ovn_desired_flow_table *);
 
+bool lflow_evaluate_pb_changes(const struct sbrec_port_binding_table *);
 void lflow_destroy(void);
 
 void lflow_expr_destroy(struct hmap *lflow_expr_cache);
