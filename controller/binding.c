@@ -501,22 +501,6 @@ remove_local_lport_ids(const struct sbrec_port_binding *binding_rec,
         sset_find_and_delete(local_lport_ids, buf);
 }
 
-enum local_binding_type {
-    BT_VIF,
-    BT_CHILD,
-    BT_VIRTUAL
-};
-
-struct local_binding {
-    struct ovs_list node;       /* In parent if any. */
-    char *name;
-    enum local_binding_type type;
-    const struct ovsrec_interface *iface;
-    const struct sbrec_port_binding *pb;
-
-    struct ovs_list children;
-};
-
 static struct local_binding *
 local_binding_create(const char *name, const struct ovsrec_interface *iface,
                      const struct sbrec_port_binding *pb,
@@ -535,12 +519,6 @@ static void
 local_binding_add(struct shash *local_bindings, struct local_binding *lbinding)
 {
     shash_add(local_bindings, lbinding->name, lbinding);
-}
-
-static struct local_binding *
-local_binding_find(struct shash *local_bindings, const char *name)
-{
-    return shash_find_data(local_bindings, name);
 }
 
 static void

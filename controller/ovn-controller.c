@@ -1355,6 +1355,10 @@ static void init_physical_ctx(struct engine_node *node,
 
     ovs_assert(br_int && chassis);
 
+    struct ovsrec_interface_table *iface_table =
+        (struct ovsrec_interface_table *)EN_OVSDB_GET(
+            engine_get_input("OVS_interface", node));
+
     struct ed_type_ct_zones *ct_zones_data =
         engine_get_input_data("ct_zones", node);
     struct simap *ct_zones = &ct_zones_data->current;
@@ -1364,12 +1368,14 @@ static void init_physical_ctx(struct engine_node *node,
     p_ctx->mc_group_table = multicast_group_table;
     p_ctx->br_int = br_int;
     p_ctx->chassis_table = chassis_table;
+    p_ctx->iface_table = iface_table;
     p_ctx->chassis = chassis;
     p_ctx->active_tunnels = &rt_data->active_tunnels;
     p_ctx->local_datapaths = &rt_data->local_datapaths;
     p_ctx->local_lports = &rt_data->local_lports;
     p_ctx->ct_zones = ct_zones;
     p_ctx->mff_ovn_geneve = ed_mff_ovn_geneve->mff_ovn_geneve;
+    p_ctx->local_bindings = &rt_data->local_bindings;
 }
 
 static void init_lflow_ctx(struct engine_node *node,
@@ -1777,6 +1783,44 @@ flow_output_port_groups_handler(struct engine_node *node, void *data)
     return _flow_output_resource_ref_handler(node, data, REF_TYPE_PORTGROUP);
 }
 
+static bool
+flow_output_ovs_interface_handler(struct engine_node *node, void *data)
+{
+    struct ed_type_runtime_data *rt_data =
+        engine_get_input_data("runtime_data", node);
+
+    struct ed_type_flow_output *fo = data;
+    struct physical_ctx p_ctx;
+
+    engine_set_node_state(node, EN_UPDATED);
+    init_physical_ctx(node, rt_data, &p_ctx);
+    return physical_handle_ovs_iface_changes(&p_ctx, &fo->flow_table);
+}
+
+static bool
+flow_output_ct_zones_handler(struct engine_node *node OVS_UNUSED,
+                             void *data OVS_UNUSED)
+{
+    struct ed_type_runtime_data *rt_data =
+        engine_get_input_data("runtime_data", node);
+
+    struct ed_type_flow_output *fo = data;
+    struct physical_ctx p_ctx;
+
+    init_physical_ctx(node, rt_data, &p_ctx);
+    physical_run(&p_ctx, &fo->flow_table);
+    engine_set_node_state(node, EN_UPDATED);
+    return true;
+}
+
+static bool
+flow_output_noop_handler(struct engine_node *node OVS_UNUSED,
+                          void *data OVS_UNUSED)
+{
+    return true;
+}
+
+
 struct ovn_controller_exit_args {
     bool *exiting;
     bool *restart;
@@ -1922,12 +1966,16 @@ main(int argc, char *argv[])
                      flow_output_addr_sets_handler);
     engine_add_input(&en_flow_output, &en_port_groups,
                      flow_output_port_groups_handler);
-    engine_add_input(&en_flow_output, &en_runtime_data, NULL);
-    engine_add_input(&en_flow_output, &en_ct_zones, NULL);
+    engine_add_input(&en_flow_output, &en_runtime_data,
+                     flow_output_noop_handler);
+    engine_add_input(&en_flow_output, &en_ct_zones,
+                     flow_output_ct_zones_handler);
     engine_add_input(&en_flow_output, &en_mff_ovn_geneve, NULL);
 
     engine_add_input(&en_flow_output, &en_ovs_open_vswitch, NULL);
     engine_add_input(&en_flow_output, &en_ovs_bridge, NULL);
+    engine_add_input(&en_flow_output, &en_ovs_interface,
+                     flow_output_ovs_interface_handler);
 
     engine_add_input(&en_flow_output, &en_sb_chassis, NULL);
     engine_add_input(&en_flow_output, &en_sb_encap, NULL);
