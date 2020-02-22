@@ -1367,8 +1367,13 @@ static void init_physical_ctx(struct engine_node *node,
 
     ovs_assert(br_int && chassis);
 
+    struct ovsrec_interface_table *iface_table =
+        (struct ovsrec_interface_table *)EN_OVSDB_GET(
+            engine_get_input("OVS_interface",
+                engine_get_input("physical_flow_changes", node)));
     struct ed_type_ct_zones *ct_zones_data =
-        engine_get_input_data("ct_zones", node);
+        engine_get_input_data("ct_zones",
+            engine_get_input("physical_flow_changes", node));
     struct simap *ct_zones = &ct_zones_data->current;
 
     p_ctx->sbrec_port_binding_by_name = sbrec_port_binding_by_name;
@@ -1376,12 +1381,14 @@ static void init_physical_ctx(struct engine_node *node,
     p_ctx->mc_group_table = multicast_group_table;
     p_ctx->br_int = br_int;
     p_ctx->chassis_table = chassis_table;
+    p_ctx->iface_table = iface_table;
     p_ctx->chassis = chassis;
     p_ctx->active_tunnels = &rt_data->active_tunnels;
     p_ctx->local_datapaths = &rt_data->local_datapaths;
     p_ctx->local_lports = &rt_data->local_lports;
     p_ctx->ct_zones = ct_zones;
     p_ctx->mff_ovn_geneve = ed_mff_ovn_geneve->mff_ovn_geneve;
+    p_ctx->local_bindings = &rt_data->local_bindings;
 }
 
 static void init_lflow_ctx(struct engine_node *node,
@@ -1644,6 +1651,8 @@ flow_output_sb_port_binding_handler(struct engine_node *node, void *data)
      *    always logical router port, and any change to logical router port
      *    would just trigger recompute.
      *
+     *  - When a port binding of type 'remote' is updated by ovn-ic.
+     *
      * Although there is no correctness issue so far (except the unusual ACL
      * use case, which doesn't seem to be a real problem), it might be better
      * to handle this more gracefully, without the need to consider these
@@ -1653,6 +1662,14 @@ flow_output_sb_port_binding_handler(struct engine_node *node, void *data)
      */
     struct physical_ctx p_ctx;
     init_physical_ctx(node, rt_data, &p_ctx);
+
+    if (!lflow_evaluate_pb_changes(p_ctx.port_binding_table)) {
+        /* If this returns false, it means there is an impact on
+         * the logical flow processing because of some changes in
+         * port bindings. Return false so that recompute is triggered
+         * for this stage. */
+        return false;
+    }
 
     physical_handle_port_binding_changes(&p_ctx, flow_table);
 
@@ -1789,6 +1806,70 @@ flow_output_port_groups_handler(struct engine_node *node, void *data)
     return _flow_output_resource_ref_handler(node, data, REF_TYPE_PORTGROUP);
 }
 
+struct ed_type_physical_flow_changes {
+    bool need_physical_run;
+    bool ovs_ifaces_changed;
+};
+
+static bool
+flow_output_physical_flow_changes_handler(struct engine_node *node, void *data)
+{
+    struct ed_type_physical_flow_changes *pfc =
+        engine_get_input_data("physical_flow_changes", node);
+    struct ed_type_runtime_data *rt_data =
+        engine_get_input_data("runtime_data", node);
+
+    struct ed_type_flow_output *fo = data;
+    struct physical_ctx p_ctx;
+    init_physical_ctx(node, rt_data, &p_ctx);
+
+    engine_set_node_state(node, EN_UPDATED);
+    if (pfc->need_physical_run) {
+        pfc->need_physical_run = false;
+        physical_run(&p_ctx, &fo->flow_table);
+        return true;
+    }
+
+    if (pfc->ovs_ifaces_changed) {
+        pfc->ovs_ifaces_changed = false;
+        return physical_handle_ovs_iface_changes(&p_ctx, &fo->flow_table);
+    }
+
+    return true;
+}
+
+static void *
+en_physical_flow_changes_init(struct engine_node *node OVS_UNUSED,
+                             struct engine_arg *arg OVS_UNUSED)
+{
+    struct ed_type_physical_flow_changes *data = xzalloc(sizeof *data);
+    return data;
+}
+
+static void
+en_physical_flow_changes_cleanup(void *data OVS_UNUSED)
+{
+
+}
+
+static void
+en_physical_flow_changes_run(struct engine_node *node, void *data OVS_UNUSED)
+{
+    struct ed_type_physical_flow_changes *pfc = data;
+    pfc->need_physical_run = true;
+    engine_set_node_state(node, EN_UPDATED);
+}
+
+static bool
+physical_flow_changes_ovs_iface_handler(struct engine_node *node OVS_UNUSED,
+                                        void *data OVS_UNUSED)
+{
+    struct ed_type_physical_flow_changes *pfc = data;
+    pfc->ovs_ifaces_changed = true;
+    engine_set_node_state(node, EN_UPDATED);
+    return true;
+}
+
 struct ovn_controller_exit_args {
     bool *exiting;
     bool *restart;
@@ -1911,6 +1992,7 @@ main(int argc, char *argv[])
     ENGINE_NODE(runtime_data, "runtime_data");
     ENGINE_NODE(mff_ovn_geneve, "mff_ovn_geneve");
     ENGINE_NODE(ofctrl_is_connected, "ofctrl_is_connected");
+    ENGINE_NODE(physical_flow_changes, "physical_flow_changes");
     ENGINE_NODE(flow_output, "flow_output");
     ENGINE_NODE(addr_sets, "addr_sets");
     ENGINE_NODE(port_groups, "port_groups");
@@ -1930,13 +2012,19 @@ main(int argc, char *argv[])
     engine_add_input(&en_port_groups, &en_sb_port_group,
                      port_groups_sb_port_group_handler);
 
+    engine_add_input(&en_physical_flow_changes, &en_ct_zones,
+                     NULL);
+    engine_add_input(&en_physical_flow_changes, &en_ovs_interface,
+                     physical_flow_changes_ovs_iface_handler);
+
     engine_add_input(&en_flow_output, &en_addr_sets,
                      flow_output_addr_sets_handler);
     engine_add_input(&en_flow_output, &en_port_groups,
                      flow_output_port_groups_handler);
     engine_add_input(&en_flow_output, &en_runtime_data, NULL);
-    engine_add_input(&en_flow_output, &en_ct_zones, NULL);
     engine_add_input(&en_flow_output, &en_mff_ovn_geneve, NULL);
+    engine_add_input(&en_flow_output, &en_physical_flow_changes,
+                     flow_output_physical_flow_changes_handler);
 
     engine_add_input(&en_flow_output, &en_ovs_open_vswitch, NULL);
     engine_add_input(&en_flow_output, &en_ovs_bridge, NULL);
