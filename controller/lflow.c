@@ -847,3 +847,16 @@ lflow_destroy(void)
     expr_symtab_destroy(&symtab);
     shash_destroy(&symtab);
 }
+
+bool
+lflow_evaluate_pb_changes(const struct sbrec_port_binding_table *pb_table)
+{
+    const struct sbrec_port_binding *binding;
+    SBREC_PORT_BINDING_TABLE_FOR_EACH_TRACKED (binding, pb_table) {
+        if (!strcmp(binding->type, "remote")) {
+            return false;
+        }
+    }
+
+    return true;
+}
