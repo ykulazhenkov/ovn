@@ -978,6 +978,23 @@ struct ed_type_runtime_data {
     struct smap local_iface_ids;
 };
 
+struct ed_type_runtime_tracked_data {
+    struct hmap tracked_dp_bindings;
+    bool local_lports_changed;
+    bool tracked;
+};
+
+static void
+en_runtime_clear_tracked_data(void *tracked_data)
+{
+    struct ed_type_runtime_tracked_data *data = tracked_data;
+
+    binding_tracked_dp_destroy(&data->tracked_dp_bindings);
+    hmap_init(&data->tracked_dp_bindings);
+    data->local_lports_changed = false;
+    data->tracked = false;
+}
+
 static void *
 en_runtime_data_init(struct engine_node *node OVS_UNUSED,
                      struct engine_arg *arg OVS_UNUSED)
@@ -991,6 +1008,13 @@ en_runtime_data_init(struct engine_node *node OVS_UNUSED,
     sset_init(&data->egress_ifaces);
     shash_init(&data->local_bindings);
     smap_init(&data->local_iface_ids);
+
+    struct ed_type_runtime_tracked_data *tracked_data =
+        xzalloc(sizeof *tracked_data);
+    hmap_init(&tracked_data->tracked_dp_bindings);
+    node->tracked_data = tracked_data;
+    node->clear_tracked_data = en_runtime_clear_tracked_data;
+
     return data;
 }
 
@@ -1093,6 +1117,8 @@ init_binding_ctx(struct engine_node *node,
     b_ctx_out->egress_ifaces = &rt_data->egress_ifaces;
     b_ctx_out->local_bindings = &rt_data->local_bindings;
     b_ctx_out->local_iface_ids = &rt_data->local_iface_ids;
+    b_ctx_out->tracked_dp_bindings = NULL;
+    b_ctx_out->local_lports_changed = NULL;
 }
 
 static void
@@ -1103,6 +1129,8 @@ en_runtime_data_run(struct engine_node *node, void *data)
     struct sset *local_lports = &rt_data->local_lports;
     struct sset *local_lport_ids = &rt_data->local_lport_ids;
     struct sset *active_tunnels = &rt_data->active_tunnels;
+
+    en_runtime_clear_tracked_data(node->tracked_data);
 
     static bool first_run = true;
     if (first_run) {
@@ -1154,9 +1182,13 @@ static bool
 runtime_data_ovs_interface_handler(struct engine_node *node, void *data)
 {
     struct ed_type_runtime_data *rt_data = data;
+    struct ed_type_runtime_tracked_data *tracked_data = node->tracked_data;
     struct binding_ctx_in b_ctx_in;
     struct binding_ctx_out b_ctx_out;
     init_binding_ctx(node, rt_data, &b_ctx_in, &b_ctx_out);
+    tracked_data->tracked = true;
+    b_ctx_out.tracked_dp_bindings = &tracked_data->tracked_dp_bindings;
+    b_ctx_out.local_lports_changed = &tracked_data->local_lports_changed;
 
     bool changed = false;
     if (!binding_handle_ovs_interface_changes(&b_ctx_in, &b_ctx_out,
@@ -1188,6 +1220,10 @@ runtime_data_sb_port_binding_handler(struct engine_node *node, void *data)
     if (!b_ctx_in.chassis_rec) {
         return false;
     }
+
+    struct ed_type_runtime_tracked_data *tracked_data = node->tracked_data;
+    tracked_data->tracked = true;
+    b_ctx_out.tracked_dp_bindings = &tracked_data->tracked_dp_bindings;
 
     bool changed = false;
     if (!binding_handle_port_binding_changes(&b_ctx_in, &b_ctx_out,
@@ -1870,6 +1906,29 @@ physical_flow_changes_ovs_iface_handler(struct engine_node *node OVS_UNUSED,
     return true;
 }
 
+static bool
+flow_output_runtime_data_handler(struct engine_node *node,
+                                 void *data OVS_UNUSED)
+{
+    struct ed_type_runtime_tracked_data *tracked_data =
+        engine_get_input_tracked_data("runtime_data", node);
+
+    if (!tracked_data || !tracked_data->tracked) {
+        return false;
+    }
+
+    if (!hmap_is_empty(&tracked_data->tracked_dp_bindings)) {
+        /* We are not yet handling the tracked datapath binding
+         * changes. Return false to trigger full recompute. */
+        return false;
+    }
+
+    if (tracked_data->local_lports_changed) {
+        engine_set_node_state(node, EN_UPDATED);
+    }
+    return true;
+}
+
 struct ovn_controller_exit_args {
     bool *exiting;
     bool *restart;
@@ -2021,7 +2080,8 @@ main(int argc, char *argv[])
                      flow_output_addr_sets_handler);
     engine_add_input(&en_flow_output, &en_port_groups,
                      flow_output_port_groups_handler);
-    engine_add_input(&en_flow_output, &en_runtime_data, NULL);
+    engine_add_input(&en_flow_output, &en_runtime_data,
+                     flow_output_runtime_data_handler);
     engine_add_input(&en_flow_output, &en_mff_ovn_geneve, NULL);
     engine_add_input(&en_flow_output, &en_physical_flow_changes,
                      flow_output_physical_flow_changes_handler);
