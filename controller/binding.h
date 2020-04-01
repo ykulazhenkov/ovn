@@ -19,6 +19,9 @@
 
 #include <stdbool.h>
 #include "openvswitch/shash.h"
+#include "openvswitch/hmap.h"
+#include "openvswitch/uuid.h"
+#include "openvswitch/list.h"
 
 struct hmap;
 struct ovsdb_idl;
@@ -58,6 +61,8 @@ struct binding_ctx_out {
     struct sset *local_lport_ids;
     struct sset *egress_ifaces;
     struct smap *local_iface_ids;
+    struct hmap *tracked_dp_bindings;
+    bool *local_lports_changed;
 };
 
 enum local_binding_type {
@@ -82,6 +87,21 @@ local_binding_find(struct shash *local_bindings, const char *name)
     return shash_find_data(local_bindings, name);
 }
 
+/* Represents a tracked binding logical port. */
+struct tracked_binding_lport {
+    const struct sbrec_port_binding *pb;
+    struct ovs_list list_node;
+    bool deleted;
+};
+
+/* Represent a tracked binding datapath. */
+struct tracked_binding_datapath {
+    struct hmap_node node;
+    const struct sbrec_datapath_binding *dp;
+    bool is_new;
+    struct ovs_list lports_head; /* List of struct tracked_binding_lport. */
+};
+
 void binding_register_ovs_idl(struct ovsdb_idl *);
 void binding_run(struct binding_ctx_in *, struct binding_ctx_out *);
 bool binding_cleanup(struct ovsdb_idl_txn *ovnsb_idl_txn,
@@ -96,4 +116,5 @@ bool binding_handle_ovs_interface_changes(struct binding_ctx_in *,
 bool binding_handle_port_binding_changes(struct binding_ctx_in *,
                                          struct binding_ctx_out *,
                                          bool *changed);
+void binding_tracked_dp_destroy(struct hmap *tracked_datapaths);
 #endif /* controller/binding.h */
