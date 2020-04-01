@@ -260,6 +260,10 @@ engine_init_run(void)
     VLOG_DBG("Initializing new run");
     for (size_t i = 0; i < engine_n_nodes; i++) {
         engine_set_node_state(engine_nodes[i], EN_STALE);
+
+        if (engine_nodes[i]->clear_tracked_data) {
+            engine_nodes[i]->clear_tracked_data(engine_nodes[i]->data);
+        }
     }
 }
 
@@ -370,7 +374,7 @@ engine_run(bool recompute_allowed)
 
         if (engine_nodes[i]->state == EN_ABORTED) {
             engine_run_aborted = true;
-            return;
+            break;
         }
     }
 }
