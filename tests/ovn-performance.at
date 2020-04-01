@@ -274,7 +274,7 @@ for i in 1 2; do
     )
 
     # Add router port to $ls
-    OVN_CONTROLLER_EXPECT_HIT(
+    OVN_CONTROLLER_EXPECT_NO_HIT(
         [hv1 hv2], [lflow_run],
         [ovn-nbctl --wait=hv lrp-add lr1 $lrp 02:00:00:00:0$i:01 10.0.$i.1/24]
     )
@@ -282,15 +282,15 @@ for i in 1 2; do
         [hv1 hv2], [lflow_run],
         [ovn-nbctl --wait=hv lsp-add $ls $lsp]
     )
-    OVN_CONTROLLER_EXPECT_HIT(
+    OVN_CONTROLLER_EXPECT_NO_HIT(
         [hv1 hv2], [lflow_run],
         [ovn-nbctl --wait=hv lsp-set-type $lsp router]
     )
-    OVN_CONTROLLER_EXPECT_HIT(
+    OVN_CONTROLLER_EXPECT_NO_HIT(
         [hv1 hv2], [lflow_run],
         [ovn-nbctl --wait=hv lsp-set-options $lsp router-port=$lrp]
     )
-    OVN_CONTROLLER_EXPECT_HIT(
+    OVN_CONTROLLER_EXPECT_NO_HIT(
         [hv1 hv2], [lflow_run],
         [ovn-nbctl --wait=hv lsp-set-addresses $lsp router]
     )
@@ -416,15 +416,15 @@ OVN_CONTROLLER_EXPECT_NO_HIT(
     [ovn-nbctl --wait=hv destroy Port_Group pg1]
 )
 
-for i in 1 2; do
-    ls=ls$i
+OVN_CONTROLLER_EXPECT_HIT(
+    [hv1 hv2], [lflow_run],
+    [ovn-nbctl --wait=hv ls-del ls1]
+)
 
-    # Delete switch $ls
-    OVN_CONTROLLER_EXPECT_HIT(
-        [hv1 hv2], [lflow_run],
-        [ovn-nbctl --wait=hv ls-del $ls]
-    )
-done
+OVN_CONTROLLER_EXPECT_NO_HIT(
+    [hv1 hv2], [lflow_run],
+    [ovn-nbctl --wait=hv ls-del ls2]
+)
 
 # Delete router lr1
 OVN_CONTROLLER_EXPECT_NO_HIT(
