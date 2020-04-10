@@ -1438,6 +1438,11 @@ static void init_lflow_ctx(struct engine_node *node,
                 engine_get_input("SB_port_binding", node),
                 "name");
 
+    struct ovsdb_idl_index *sbrec_logical_flow_by_dp =
+        engine_ovsdb_node_get_index(
+                engine_get_input("SB_logical_flow", node),
+                "logical_datapath");
+
     struct ovsdb_idl_index *sbrec_mc_group_by_name_dp =
         engine_ovsdb_node_get_index(
                 engine_get_input("SB_multicast_group", node),
@@ -1485,6 +1490,8 @@ static void init_lflow_ctx(struct engine_node *node,
 
     l_ctx_in->sbrec_multicast_group_by_name_datapath =
         sbrec_mc_group_by_name_dp;
+    l_ctx_in->sbrec_logical_flow_by_logical_datapath =
+        sbrec_logical_flow_by_dp;
     l_ctx_in->sbrec_port_binding_by_name = sbrec_port_binding_by_name;
     l_ctx_in->dhcp_options_table  = dhcp_table;
     l_ctx_in->dhcpv6_options_table = dhcpv6_table;
@@ -1639,7 +1646,8 @@ flow_output_sb_mac_binding_handler(struct engine_node *node, void *data)
 }
 
 static bool
-flow_output_sb_port_binding_handler(struct engine_node *node, void *data)
+flow_output_sb_port_binding_handler(struct engine_node *node,
+                                    void *data)
 {
     struct ed_type_runtime_data *rt_data =
         engine_get_input_data("runtime_data", node);
@@ -1647,54 +1655,9 @@ flow_output_sb_port_binding_handler(struct engine_node *node, void *data)
     struct ed_type_flow_output *fo = data;
     struct ovn_desired_flow_table *flow_table = &fo->flow_table;
 
-    /* XXX: now we handle port-binding changes for physical flow processing
-     * only, but port-binding change can have impact to logical flow
-     * processing, too, in below circumstances:
-     *
-     *  - When a port-binding for a lport is inserted/deleted but the lflow
-     *    using that lport doesn't change.
-     *
-     *    This can happen only when the lport name is used by ACL match
-     *    condition, which is specified by user. Even in that case, if the port
-     *    is actually bound on the current chassis it will trigger recompute on
-     *    that chassis since ovs interface would be updated. So the only
-     *    situation this would have real impact is when user defines an ACL
-     *    that includes lport that is not on current chassis, and there is a
-     *    port-binding creation/deletion related to that lport.e.g.: an ACL is
-     *    defined:
-     *
-     *    to-lport 1000 'outport=="A" && inport=="B"' allow-related
-     *
-     *    If "A" is on current chassis, but "B" is lport that hasn't been
-     *    created yet. When a lport "B" is created and bound on another
-     *    chassis, the ACL will not take effect on the current chassis until a
-     *    recompute is triggered later. This case doesn't seem to be a problem
-     *    for real world use cases because usually lport is created before
-     *    being referenced by name in ACLs.
-     *
-     *  - When is_chassis_resident(<lport>) is used in lflow. In this case the
-     *    port binding is not a regular VIF. It can be either "patch" or
-     *    "external", with ha-chassis-group assigned.  In current
-     *    "runtime_data" handling, port-binding changes for these types always
-     *    trigger recomputing. So it is fine even if we do not handle it here.
-     *    (due to the ovsdb tracking support for referenced table changes,
-     *    ha-chassis-group changes will appear as port-binding change).
-     *
-     *  - When a mac-binding doesn't change but the port-binding related to
-     *    that mac-binding is deleted. In this case the neighbor flow generated
-     *    for the mac-binding should be deleted. This would not cause any real
-     *    issue for now, since the port-binding related to mac-binding is
-     *    always logical router port, and any change to logical router port
-     *    would just trigger recompute.
-     *
-     *  - When a port binding of type 'remote' is updated by ovn-ic.
-     *
-     * Although there is no correctness issue so far (except the unusual ACL
-     * use case, which doesn't seem to be a real problem), it might be better
-     * to handle this more gracefully, without the need to consider these
-     * tricky scenarios.  One approach is to maintain a mapping between lport
-     * names and the lflows that uses them, and reprocess the related lflows
-     * when related port-bindings change.
+    /* We handle port-binding changes for physical flow processing
+     * only. flow_output runtime data handler takes care of processing
+     * logical flows for any port binding changes.
      */
     struct physical_ctx p_ctx;
     init_physical_ctx(node, rt_data, &p_ctx);
@@ -1794,6 +1757,8 @@ _flow_output_resource_ref_handler(struct engine_node *node, void *data,
             updated = &pg_data->updated;
             deleted = &pg_data->deleted;
             break;
+
+        case REF_TYPE_PORTBINDING:
         default:
             OVS_NOT_REACHED();
     }
@@ -1917,16 +1882,52 @@ flow_output_runtime_data_handler(struct engine_node *node,
         return false;
     }
 
-    if (!hmap_is_empty(&tracked_data->tracked_dp_bindings)) {
-        /* We are not yet handling the tracked datapath binding
-         * changes. Return false to trigger full recompute. */
-        return false;
+    if (hmap_is_empty(&tracked_data->tracked_dp_bindings)) {
+        if (tracked_data->local_lports_changed) {
+            engine_set_node_state(node, EN_UPDATED);
+        }
+        return true;
     }
 
-    if (tracked_data->local_lports_changed) {
+    struct lflow_ctx_in l_ctx_in;
+    struct lflow_ctx_out l_ctx_out;
+    struct ed_type_flow_output *fo = data;
+    struct ed_type_runtime_data *rt_data =
+        engine_get_input_data("runtime_data", node);
+    init_lflow_ctx(node, rt_data, fo, &l_ctx_in, &l_ctx_out);
+
+    struct physical_ctx p_ctx;
+    init_physical_ctx(node, rt_data, &p_ctx);
+
+    bool handled = true;
+    struct tracked_binding_datapath *tdp;
+    HMAP_FOR_EACH (tdp, node, &tracked_data->tracked_dp_bindings) {
+        if (tdp->is_new) {
+            handled = lflow_add_flows_for_datapath(tdp->dp, &l_ctx_in,
+                                                   &l_ctx_out);
+            if (!handled) {
+                break;
+            }
+        } else {
+            struct tracked_binding_lport *lport;
+            LIST_FOR_EACH (lport, list_node, &tdp->lports_head) {
+                if (!lflow_handle_flows_for_lport(lport->pb, &l_ctx_in,
+                                                  &l_ctx_out)) {
+                    handled = false;
+                    break;
+                }
+            }
+            if (!handled) {
+                break;
+            }
+        }
+    }
+
+    if (handled) {
         engine_set_node_state(node, EN_UPDATED);
     }
-    return true;
+
+    return handled;
 }
 
 struct ovn_controller_exit_args {
@@ -1983,6 +1984,9 @@ main(int argc, char *argv[])
         = chassis_index_create(ovnsb_idl_loop.idl);
     struct ovsdb_idl_index *sbrec_multicast_group_by_name_datapath
         = mcast_group_index_create(ovnsb_idl_loop.idl);
+    struct ovsdb_idl_index *sbrec_logical_flow_by_logical_datapath
+        = ovsdb_idl_index_create1(ovnsb_idl_loop.idl,
+                                  &sbrec_logical_flow_col_logical_datapath);
     struct ovsdb_idl_index *sbrec_port_binding_by_name
         = ovsdb_idl_index_create1(ovnsb_idl_loop.idl,
                                   &sbrec_port_binding_col_logical_port);
@@ -2132,6 +2136,8 @@ main(int argc, char *argv[])
     engine_ovsdb_node_add_index(&en_sb_chassis, "name", sbrec_chassis_by_name);
     engine_ovsdb_node_add_index(&en_sb_multicast_group, "name_datapath",
                                 sbrec_multicast_group_by_name_datapath);
+    engine_ovsdb_node_add_index(&en_sb_logical_flow, "logical_datapath",
+                                sbrec_logical_flow_by_logical_datapath);
     engine_ovsdb_node_add_index(&en_sb_port_binding, "name",
                                 sbrec_port_binding_by_name);
     engine_ovsdb_node_add_index(&en_sb_port_binding, "key",
