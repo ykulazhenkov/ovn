@@ -33,6 +33,7 @@ struct ovsrec_bridge;
 struct simap;
 struct sbrec_multicast_group_table;
 struct sbrec_port_binding_table;
+struct sbrec_port_binding;
 struct sset;
 
 /* OVN Geneve option information.
@@ -61,7 +62,7 @@ struct physical_ctx {
 void physical_register_ovs_idl(struct ovsdb_idl *);
 void physical_run(struct physical_ctx *,
                   struct ovn_desired_flow_table *);
-void physical_handle_port_binding_changes(struct physical_ctx *,
+void physical_handle_port_binding_changes(struct physical_ctx *p_ctx,
                                           struct ovn_desired_flow_table *);
 void physical_handle_mc_group_changes(struct physical_ctx *,
                                       struct ovn_desired_flow_table *);
