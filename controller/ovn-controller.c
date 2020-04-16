@@ -277,8 +277,18 @@ create_br_int(struct ovsdb_idl_txn *ovs_idl_txn,
     bridge = ovsrec_bridge_insert(ovs_idl_txn);
     ovsrec_bridge_set_name(bridge, bridge_name);
     ovsrec_bridge_set_fail_mode(bridge, "secure");
-    const struct smap oc = SMAP_CONST1(&oc, "disable-in-band", "true");
+
+    uint64_t dpid = ((uint64_t) iface->header_.uuid.parts[0] << 32)
+                      | ((uint64_t) iface->header_.uuid.parts[1]);
+
+    char *dpid_string = xasprintf("%016"PRIx64, dpid);
+    struct smap oc = SMAP_INITIALIZER(&oc);
+    smap_add(&oc, "disable-in-band", "true");
+    smap_add(&oc, "datapath-id", dpid_string);
+    free(dpid_string);
     ovsrec_bridge_set_other_config(bridge, &oc);
+    smap_destroy(&oc);
+
     ovsrec_bridge_set_ports(bridge, &port, 1);
 
     struct ovsrec_bridge **bridges;
