@@ -1461,6 +1461,7 @@ static void init_physical_ctx(struct engine_node *node,
         engine_ovsdb_node_get_index(
                 engine_get_input("SB_chassis", node),
                 "name");
+
     if (chassis_id) {
         chassis = chassis_lookup_by_name(sbrec_chassis_by_name, chassis_id);
     }
@@ -1536,8 +1537,8 @@ static void init_lflow_ctx(struct engine_node *node,
     const struct sbrec_chassis *chassis = NULL;
     struct ovsdb_idl_index *sbrec_chassis_by_name =
         engine_ovsdb_node_get_index(
-                engine_get_input("SB_chassis", node),
-                "name");
+            engine_get_input("SB_chassis", node),
+            "name");
     if (chassis_id) {
         chassis = chassis_lookup_by_name(sbrec_chassis_by_name, chassis_id);
     }
@@ -1617,8 +1618,8 @@ en_flow_output_run(struct engine_node *node, void *data)
 
     struct ovsdb_idl_index *sbrec_chassis_by_name =
         engine_ovsdb_node_get_index(
-                engine_get_input("SB_chassis", node),
-                "name");
+            engine_get_input("SB_chassis", node),
+            "name");
 
     const struct sbrec_chassis *chassis = NULL;
     if (chassis_id) {
@@ -1775,8 +1776,8 @@ _flow_output_resource_ref_handler(struct engine_node *node, void *data,
 
     struct ovsdb_idl_index *sbrec_chassis_by_name =
         engine_ovsdb_node_get_index(
-                engine_get_input("SB_chassis", node),
-                "name");
+            engine_get_input("SB_chassis", node),
+            "name");
     const struct sbrec_chassis *chassis = NULL;
     if (chassis_id) {
         chassis = chassis_lookup_by_name(sbrec_chassis_by_name, chassis_id);
@@ -2014,6 +2015,31 @@ physical_flow_changes_ovs_iface_handler(struct engine_node *node, void *data)
     return true;
 }
 
+/* Handles sbrec_chassis changes.
+ * If a new chassis is added or removed return false, so that
+ * physical flows are programmed.
+ * For any updates, there is no need for any flow computation.
+ * Encap changes will also result in sbrec_chassis changes,
+ * but we handle encap changes separately.
+ */
+static bool
+physical_flow_changes_sb_chassis_handler(struct engine_node *node OVS_UNUSED,
+                                         void *data OVS_UNUSED)
+{
+    struct sbrec_chassis_table *chassis_table =
+        (struct sbrec_chassis_table *)EN_OVSDB_GET(
+            engine_get_input("SB_chassis", node));
+
+    const struct sbrec_chassis *ch;
+    SBREC_CHASSIS_TABLE_FOR_EACH_TRACKED (ch, chassis_table) {
+        if (sbrec_chassis_is_deleted(ch) || sbrec_chassis_is_new(ch)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 static bool
 flow_output_physical_flow_changes_handler(struct engine_node *node, void *data)
 {
@@ -2199,6 +2225,10 @@ main(int argc, char *argv[])
                      NULL);
     engine_add_input(&en_physical_flow_changes, &en_ovs_interface,
                      physical_flow_changes_ovs_iface_handler);
+    engine_add_input(&en_physical_flow_changes, &en_sb_chassis,
+                     physical_flow_changes_sb_chassis_handler);
+    engine_add_input(&en_physical_flow_changes, &en_sb_encap,
+                     NULL);
 
     engine_add_input(&en_flow_output, &en_addr_sets,
                      flow_output_addr_sets_handler);
@@ -2217,9 +2247,10 @@ main(int argc, char *argv[])
 
     engine_add_input(&en_flow_output, &en_ovs_open_vswitch, NULL);
     engine_add_input(&en_flow_output, &en_ovs_bridge, NULL);
+    engine_add_input(&en_flow_output, &en_sb_chassis,
+                     flow_output_noop_handler);
+    engine_add_input(&en_flow_output, &en_ovs_bridge, NULL);
 
-    engine_add_input(&en_flow_output, &en_sb_chassis, NULL);
-    engine_add_input(&en_flow_output, &en_sb_encap, NULL);
     engine_add_input(&en_flow_output, &en_sb_multicast_group,
                      flow_output_sb_multicast_group_handler);
     engine_add_input(&en_flow_output, &en_sb_port_binding,
@@ -2246,7 +2277,8 @@ main(int argc, char *argv[])
                      runtime_data_ovs_interface_handler);
     engine_add_input(&en_runtime_data, &en_ovs_qos, NULL);
 
-    engine_add_input(&en_runtime_data, &en_sb_chassis, NULL);
+    engine_add_input(&en_runtime_data, &en_sb_chassis,
+                     runtime_data_noop_handler);
     engine_add_input(&en_runtime_data, &en_sb_datapath_binding,
                      runtime_data_sb_datapath_binding_handler);
     engine_add_input(&en_runtime_data, &en_sb_port_binding,
