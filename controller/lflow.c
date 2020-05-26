@@ -1084,7 +1084,7 @@ static void
 consider_neighbor_flow(struct ovsdb_idl_index *sbrec_port_binding_by_name,
                        const struct hmap *local_datapaths,
                        const struct sbrec_mac_binding *b,
-                       struct ovn_desired_flow_table *flow_table)
+                       struct ovn_flow_table *flow_table)
 {
     const struct sbrec_port_binding *pb
         = lport_lookup_by_name(sbrec_port_binding_by_name, b->logical_port);
@@ -1164,7 +1164,7 @@ static void
 add_neighbor_flows(struct ovsdb_idl_index *sbrec_port_binding_by_name,
                    const struct sbrec_mac_binding_table *mac_binding_table,
                    const struct hmap *local_datapaths,
-                   struct ovn_desired_flow_table *flow_table)
+                   struct ovn_flow_table *flow_table)
 {
     const struct sbrec_mac_binding *b;
     SBREC_MAC_BINDING_TABLE_FOR_EACH (b, mac_binding_table) {
@@ -1178,7 +1178,7 @@ add_lb_vip_hairpin_flows(struct ovn_controller_lb *lb,
                          struct ovn_lb_vip *lb_vip,
                          struct ovn_lb_backend *lb_backend,
                          uint8_t lb_proto,
-                         struct ovn_desired_flow_table *flow_table)
+                         struct ovn_flow_table *flow_table)
 {
     uint64_t stub[1024 / 8];
     struct ofpbuf ofpacts = OFPBUF_STUB_INITIALIZER(stub);
@@ -1256,7 +1256,7 @@ add_lb_vip_hairpin_flows(struct ovn_controller_lb *lb,
 static void
 add_lb_ct_snat_vip_flows(struct ovn_controller_lb *lb,
                          struct ovn_lb_vip *lb_vip,
-                         struct ovn_desired_flow_table *flow_table)
+                         struct ovn_flow_table *flow_table)
 {
     uint64_t stub[1024 / 8];
     struct ofpbuf ofpacts = OFPBUF_STUB_INITIALIZER(stub);
@@ -1314,7 +1314,7 @@ add_lb_ct_snat_vip_flows(struct ovn_controller_lb *lb,
 static void
 consider_lb_hairpin_flows(const struct sbrec_load_balancer *sbrec_lb,
                           const struct hmap *local_datapaths,
-                          struct ovn_desired_flow_table *flow_table)
+                          struct ovn_flow_table *flow_table)
 {
     /* Check if we need to add flows or not.  If there is one datapath
      * in the local_datapaths, it means all the datapaths of the lb
@@ -1362,7 +1362,7 @@ consider_lb_hairpin_flows(const struct sbrec_load_balancer *sbrec_lb,
 static void
 add_lb_hairpin_flows(const struct sbrec_load_balancer_table *lb_table,
                      const struct hmap *local_datapaths,
-                     struct ovn_desired_flow_table *flow_table)
+                     struct ovn_flow_table *flow_table)
 {
     const struct sbrec_load_balancer *lb;
     SBREC_LOAD_BALANCER_TABLE_FOR_EACH (lb, lb_table) {
@@ -1376,7 +1376,7 @@ lflow_handle_changed_neighbors(
     struct ovsdb_idl_index *sbrec_port_binding_by_name,
     const struct sbrec_mac_binding_table *mac_binding_table,
     const struct hmap *local_datapaths,
-    struct ovn_desired_flow_table *flow_table)
+    struct ovn_flow_table *flow_table)
 {
     const struct sbrec_mac_binding *mb;
     /* Handle deleted mac_bindings first, to avoid *duplicated flow* problem

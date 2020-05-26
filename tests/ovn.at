@@ -23703,12 +23703,12 @@ ovn_remote=$(ovs-vsctl get open . external_ids:ovn-remote | sed s/\"//g)
 ovs-vsctl set open . external_ids:ovn-remote=unix:foo
 check ovs-vsctl set interface vif2 external_ids:iface-id=foo
 
-# ovn-controller is not connected to the SB DB. Even though it
-# releases sw0-p2, it will not delete the OF flows.
+# ovn-controller is not connected to the SB DB. But it will
+# releases sw0-p2, and also delete the OF flows in table 0.
 as hv1 ovs-ofctl dump-flows br-int table=0 > offlows_table0.txt
 AT_CAPTURE_FILE([offlows_table0.txt])
-AT_CHECK_UNQUOTED([grep -c "in_port=2" offlows_table0.txt], [0], [dnl
-1
+AT_CHECK_UNQUOTED([grep -c "in_port=2" offlows_table0.txt], [1], [dnl
+0
 ])
 
 # Change the version to incorrect one and reconnect to the SB DB.
@@ -23721,8 +23721,8 @@ sleep 1
 
 as hv1 ovs-ofctl dump-flows br-int table=0 > offlows_table0.txt
 AT_CAPTURE_FILE([offlows_table0.txt])
-AT_CHECK_UNQUOTED([grep -c "in_port=2" offlows_table0.txt], [0], [dnl
-1
+AT_CHECK_UNQUOTED([grep -c "in_port=2" offlows_table0.txt], [1], [dnl
+0
 ])
 
 wait_row_count Port_Binding 1 logical_port=sw0-p2 chassis=$ch

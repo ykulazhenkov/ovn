@@ -40,7 +40,7 @@
 
 struct ovn_extend_table;
 struct ovsdb_idl_index;
-struct ovn_desired_flow_table;
+struct ovn_flow_table;
 struct hmap;
 struct hmap_node;
 struct sbrec_chassis;
@@ -146,7 +146,7 @@ struct lflow_ctx_in {
 };
 
 struct lflow_ctx_out {
-    struct ovn_desired_flow_table *flow_table;
+    struct ovn_flow_table *flow_table;
     struct ovn_extend_table *group_table;
     struct ovn_extend_table *meter_table;
     struct lflow_resource_ref *lfrr;
@@ -165,7 +165,7 @@ void lflow_handle_changed_neighbors(
     struct ovsdb_idl_index *sbrec_port_binding_by_name,
     const struct sbrec_mac_binding_table *,
     const struct hmap *local_datapaths,
-    struct ovn_desired_flow_table *);
+    struct ovn_flow_table *);
 bool lflow_handle_changed_lbs(struct lflow_ctx_in *, struct lflow_ctx_out *);
 void lflow_destroy(void);
 
