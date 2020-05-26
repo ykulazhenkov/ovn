@@ -142,7 +142,8 @@ static struct rconn_packet_counter *tx_counter;
 
 /* Flow table of "struct ovn_flow"s, that holds the flow table currently
  * installed in the switch. */
-static struct hmap installed_flows;
+static struct hmap installed_lflows;
+static struct hmap installed_pflows;
 
 /* A reference to the group_table. */
 static struct ovn_extend_table *groups;
@@ -180,7 +181,8 @@ ofctrl_init(struct ovn_extend_table *group_table,
     swconn = rconn_create(inactivity_probe_interval, 0,
                           DSCP_DEFAULT, 1 << OFP15_VERSION);
     tx_counter = rconn_packet_counter_create();
-    hmap_init(&installed_flows);
+    hmap_init(&installed_lflows);
+    hmap_init(&installed_pflows);
     ovs_list_init(&flow_updates);
     ovn_init_symtab(&symtab);
     groups = group_table;
@@ -891,8 +893,13 @@ static void
 ovn_installed_flow_table_clear(void)
 {
     struct ovn_flow *f, *next;
-    HMAP_FOR_EACH_SAFE (f, next, match_hmap_node, &installed_flows) {
-        hmap_remove(&installed_flows, &f->match_hmap_node);
+    HMAP_FOR_EACH_SAFE (f, next, match_hmap_node, &installed_lflows) {
+        hmap_remove(&installed_lflows, &f->match_hmap_node);
+        ovn_flow_destroy(f);
+    }
+
+    HMAP_FOR_EACH_SAFE (f, next, match_hmap_node, &installed_pflows) {
+        hmap_remove(&installed_pflows, &f->match_hmap_node);
         ovn_flow_destroy(f);
     }
 }
@@ -901,7 +908,8 @@ static void
 ovn_installed_flow_table_destroy(void)
 {
     ovn_installed_flow_table_clear();
-    hmap_destroy(&installed_flows);
+    hmap_destroy(&installed_lflows);
+    hmap_destroy(&installed_pflows);
 }
 
 /* Flow table update. */
@@ -1114,6 +1122,70 @@ ofctrl_can_put(void)
     return true;
 }
 
+static void
+ofctrl_sync_flows(struct ovn_desired_flow_table *flow_table,
+                  struct hmap *installed_flows,
+                  struct ovs_list *msgs)
+{
+    /* Iterate through all of the installed flows.  If any of them are no
+     * longer desired, delete them; if any of them should have different
+     * actions, update them. */
+    struct ovn_flow *i, *next;
+    HMAP_FOR_EACH_SAFE (i, next, match_hmap_node, &installed_flows) {
+        struct ovn_flow *d = ovn_flow_lookup(&flow_table->match_flow_table,
+                                             i, false);
+        if (!d) {
+            /* Installed flow is no longer desirable.  Delete it from the
+             * switch and from installed_flows. */
+            struct ofputil_flow_mod fm = {
+                .match = i->match,
+                .priority = i->priority,
+                .table_id = i->table_id,
+                .command = OFPFC_DELETE_STRICT,
+            };
+            add_flow_mod(&fm, &msgs);
+            ovn_flow_log(i, "removing installed");
+
+            hmap_remove(&installed_flows, &i->match_hmap_node);
+            ovn_flow_destroy(i);
+        } else {
+            if (!uuid_equals(&i->sb_uuid, &d->sb_uuid)) {
+                /* Update installed flow's UUID. */
+                i->sb_uuid = d->sb_uuid;
+            }
+            if (!ofpacts_equal(i->ofpacts, i->ofpacts_len,
+                               d->ofpacts, d->ofpacts_len) ||
+                i->cookie != d->cookie) {
+                /* Update actions in installed flow. */
+                struct ofputil_flow_mod fm = {
+                    .match = i->match,
+                    .priority = i->priority,
+                    .table_id = i->table_id,
+                    .ofpacts = d->ofpacts,
+                    .ofpacts_len = d->ofpacts_len,
+                    .command = OFPFC_MODIFY_STRICT,
+                };
+                /* Update cookie if it is changed. */
+                if (i->cookie != d->cookie) {
+                    fm.modify_cookie = true;
+                    fm.new_cookie = htonll(d->cookie);
+                    /* Use OFPFC_ADD so that cookie can be updated. */
+                    fm.command = OFPFC_ADD,
+                    i->cookie = d->cookie;
+                }
+                add_flow_mod(&fm, &msgs);
+                ovn_flow_log(i, "updating installed");
+
+                /* Replace 'i''s actions by 'd''s. */
+                free(i->ofpacts);
+                i->ofpacts = xmemdup(d->ofpacts, d->ofpacts_len);
+                i->ofpacts_len = d->ofpacts_len;
+            }
+
+        }
+    }
+}
+
 /* Replaces the flow table on the switch, if possible, by the flows added
  * with ofctrl_add_flow().
  *
@@ -1126,7 +1198,8 @@ ofctrl_can_put(void)
  *
  * This should be called after ofctrl_run() within the main loop. */
 void
-ofctrl_put(struct ovn_desired_flow_table *flow_table,
+ofctrl_put(struct ovn_desired_flow_table *lflow_table,
+           struct ovn_desired_flow_table *pflow_table,
            struct shash *pending_ct_zones,
            const struct sbrec_meter_table *meter_table,
            int64_t nb_cfg,
