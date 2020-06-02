@@ -1770,6 +1770,29 @@ is_iface_vif(const struct ovsrec_interface *iface_rec)
     return true;
 }
 
+static bool
+is_tunnel_iface(const struct ovsrec_interface *iface_rec)
+{
+    if (iface_rec->type && iface_rec->type[0] &&
+            (!strcmp(iface_rec->type, "geneve") ||
+             !strcmp(iface_rec->type, "stt"))) {
+        return true;
+    }
+
+    return false;
+}
+
+static bool
+is_patch_iface(const struct ovsrec_interface *iface_rec)
+{
+    if (iface_rec->type && iface_rec->type[0] &&
+            !strcmp(iface_rec->type, "patch")) {
+        return true;
+    }
+
+    return false;
+}
+
 /* Returns true if the ovs interface changes were handled successfully,
  * false otherwise.
  */
@@ -1809,11 +1832,19 @@ binding_handle_ovs_interface_changes(struct binding_ctx_in *b_ctx_in,
     OVSREC_INTERFACE_TABLE_FOR_EACH_TRACKED (iface_rec,
                                              b_ctx_in->iface_table) {
         if (!is_iface_vif(iface_rec)) {
-            /* Right now are not handling ovs_interface changes of
-             * other types. This can be enhanced to handle of
-             * types - patch and tunnel. */
-            handled = false;
-            break;
+            if (is_tunnel_iface(iface_rec) &&
+                    b_ctx_out->tunnel_ifaces_changed) {
+                *b_ctx_out->tunnel_ifaces_changed = true;
+            } else if (!is_patch_iface(iface_rec)) {
+                /* Set handled to false, as we don't handle other iface types.
+                 * Right now we handle changes for
+                 *   - VIF interfaces
+                 *   - geneve/stt interfaces and
+                 *   - patch interfaces.
+                 */
+                handled = false;
+                break;
+            }
         }
 
         const char *iface_id = smap_get(&iface_rec->external_ids, "iface-id");
@@ -1875,6 +1906,12 @@ binding_handle_ovs_interface_changes(struct binding_ctx_in *b_ctx_in,
      */
     OVSREC_INTERFACE_TABLE_FOR_EACH_TRACKED (iface_rec,
                                              b_ctx_in->iface_table) {
+        if (!is_iface_vif(iface_rec)) {
+            /* We have already handled the non VIF interfaces in the first
+             * loop. */
+            continue;
+        }
+
         /* Loop to handle create and update changes only. */
         if (ovsrec_interface_is_deleted(iface_rec)) {
             continue;

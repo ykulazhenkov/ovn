@@ -980,6 +980,7 @@ struct ed_type_runtime_data {
     /* Tracked data. See below for more details and comments. */
     bool tracked;
     bool local_lports_changed;
+    bool tunnel_ifaces_changed;
     struct hmap tracked_dp_bindings;
 };
 
@@ -1013,6 +1014,10 @@ struct ed_type_runtime_data {
  * |                      | clauses and there isno need for any flow        |
  * |                      | (re)computations.                               |
  *  ------------------------------------------------------------------------
+ * |                      | This represents if the OVS interfaces of type   |
+ * |@tunnel_ifaces_changed| geneve/stt changed.                             |
+ * |                      |                                                 |
+*   ------------------------------------------------------------------------
  * |                      | This represents if the data was tracked or not  |
  * |                      | by the runtime data handlers during the engine  |
  * |   @tracked           | run. If the runtime data recompute is           |
@@ -1052,6 +1057,7 @@ en_runtime_data_clear_tracked_data(void *data_)
     binding_tracked_dp_destroy(&data->tracked_dp_bindings);
     hmap_init(&data->tracked_dp_bindings);
     data->local_lports_changed = false;
+    data->tunnel_ifaces_changed = false;
     data->tracked = false;
 }
 
@@ -1178,6 +1184,7 @@ init_binding_ctx(struct engine_node *node,
     b_ctx_out->local_iface_ids = &rt_data->local_iface_ids;
     b_ctx_out->tracked_dp_bindings = NULL;
     b_ctx_out->local_lports_changed = NULL;
+    b_ctx_out->tunnel_ifaces_changed = NULL;
 }
 
 static void
@@ -1254,6 +1261,7 @@ runtime_data_ovs_interface_handler(struct engine_node *node, void *data)
     rt_data->tracked = true;
     b_ctx_out.tracked_dp_bindings = &rt_data->tracked_dp_bindings;
     b_ctx_out.local_lports_changed = &rt_data->local_lports_changed;
+    b_ctx_out.tunnel_ifaces_changed = &rt_data->tunnel_ifaces_changed;
 
     bool changed = false;
     if (!binding_handle_ovs_interface_changes(&b_ctx_in, &b_ctx_out,
@@ -2041,6 +2049,21 @@ physical_flow_changes_sb_chassis_handler(struct engine_node *node OVS_UNUSED,
 }
 
 static bool
+physical_flow_changes_runtime_data_handler(struct engine_node *node, void *data)
+{
+    struct ed_type_runtime_data *rt_data =
+        engine_get_input_data("runtime_data", node);
+
+    struct ed_type_pfc_data *pfc_tdata = data;
+    if (rt_data->tracked && rt_data->tunnel_ifaces_changed) {
+        pfc_tdata->recompute_physical_flows = true;
+        engine_set_node_state(node, EN_UPDATED);
+    }
+
+    return true;
+}
+
+static bool
 flow_output_physical_flow_changes_handler(struct engine_node *node, void *data)
 {
     struct ed_type_runtime_data *rt_data =
@@ -2227,6 +2250,8 @@ main(int argc, char *argv[])
                      physical_flow_changes_ovs_iface_handler);
     engine_add_input(&en_physical_flow_changes, &en_sb_chassis,
                      physical_flow_changes_sb_chassis_handler);
+    engine_add_input(&en_physical_flow_changes, &en_runtime_data,
+                     physical_flow_changes_runtime_data_handler);
     engine_add_input(&en_physical_flow_changes, &en_sb_encap,
                      NULL);
 

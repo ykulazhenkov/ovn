@@ -79,6 +79,10 @@ struct binding_ctx_out {
      * binding_handle_port_binding_changes) fills in for
      * the changed datapaths and port bindings. */
     struct hmap *tracked_dp_bindings;
+
+    /* If there are any changes to OVS interfaces of type geneve/stt, it
+     * is set to true by the callee. */
+    bool *tunnel_ifaces_changed;
 };
 
 enum local_binding_type {
