@@ -2343,7 +2343,8 @@ main(int argc, char *argv[])
     while (!exiting) {
         engine_init_run();
 
-        struct ovsdb_idl_txn *ovs_idl_txn = ovsdb_idl_loop_run(&ovs_idl_loop);
+        struct ovsdb_idl_txn *ovs_idl_txn
+            = ovn_ovsdb_idl_loop_run(&ovs_idl_loop);
         unsigned int new_ovs_cond_seqno
             = ovsdb_idl_get_condition_seqno(ovs_idl_loop.idl);
         if (new_ovs_cond_seqno != ovs_cond_seqno) {
@@ -2359,7 +2360,7 @@ main(int argc, char *argv[])
         ofctrl_set_probe_interval(get_ofctrl_probe_interval(ovs_idl_loop.idl));
 
         struct ovsdb_idl_txn *ovnsb_idl_txn
-            = ovsdb_idl_loop_run(&ovnsb_idl_loop);
+            = ovn_ovsdb_idl_loop_run(&ovnsb_idl_loop);
         unsigned int new_ovnsb_cond_seqno
             = ovsdb_idl_get_condition_seqno(ovnsb_idl_loop.idl);
         if (new_ovnsb_cond_seqno != ovnsb_cond_seqno) {

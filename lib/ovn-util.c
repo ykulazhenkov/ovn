@@ -602,3 +602,43 @@ str_tolower(const char *orig)
 
     return copy;
 }
+
+struct ovsdb_idl_txn *
+ovn_ovsdb_idl_loop_run(struct ovsdb_idl_loop *loop)
+{
+    struct ovsdb_idl_txn *ovs_idl_txn = ovsdb_idl_loop_run(loop);
+
+    if (ovs_idl_txn) {
+        return ovs_idl_txn;
+    }
+
+    /* Below are the reasons for the ovs_idl_txn to be NULL.
+     *   1. loop->committing_txn is not NULL, which there is a transaction
+     *      not committed yet.
+     *
+     *   2. ovsdb_idl_get_seqno(loop->idl) == loop->skip_seqno.
+     *
+     * Lets say, ovn-controller, claims an lport. The IDL will send the
+     * transaction to the ovsdb-server. the ovsdb_idl_loop->committing_txn
+     * will be set. When ovsdb-server sends the reply of setting the
+     * chassis column of Port_Binding, the  ovsdb_idl_loop_run() when
+     * called will return NULL txn as loop->committing_txn is still not NULL.
+     * In such cases, the I-P engine aborts if any handler returns false.
+     *
+     * We can try to solve this, by first calling
+     * ovsdb_idl_loop_commit_and_wait() to see if it can commit the
+     * committing transaction. If it commits, we can create a new
+     * transaction.
+     */
+
+    if (loop->committing_txn) {
+        ovsdb_idl_loop_commit_and_wait(loop);
+        ovs_idl_txn = (loop->committing_txn
+                       || ovsdb_idl_get_seqno(loop->idl) == loop->skip_seqno
+                       ? NULL
+                       : ovsdb_idl_txn_create(loop->idl));
+        loop->open_txn = ovs_idl_txn;
+    }
+
+    return ovs_idl_txn;
+}

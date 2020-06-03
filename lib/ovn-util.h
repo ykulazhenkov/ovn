@@ -32,6 +32,8 @@ struct eth_addr;
 struct sbrec_port_binding;
 struct sbrec_datapath_binding;
 struct unixctl_conn;
+struct ovsdb_idl_txn;
+struct ovsdb_idl_loop;
 
 struct ipv4_netaddr {
     ovs_be32 addr;            /* 192.168.10.123 */
@@ -191,5 +193,9 @@ char *str_tolower(const char *orig);
         case OVN_OPT_OVERWRITE_PIDFILE:             \
         case OVN_OPT_MONITOR:                       \
         case OVN_OPT_USER_GROUP:
+
+/* Wrapper function(s) for OVS IDL. */
+
+struct ovsdb_idl_txn * ovn_ovsdb_idl_loop_run(struct ovsdb_idl_loop *loop);
 
 #endif
