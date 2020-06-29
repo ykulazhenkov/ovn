@@ -2299,6 +2299,9 @@ trace_actions(const struct ovnact *ovnacts, size_t ovnacts_len,
             break;
         case OVNACT_DHCP6_REPLY:
             break;
+        case OVNACT_CT_SAVE:
+        case OVNACT_CT_IS_SAVED:
+            break;
         }
     }
     ds_destroy(&s);

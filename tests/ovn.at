@@ -14181,38 +14181,38 @@ logical_port=ls1-lp_ext1`
     test "$chassis" = "$hv1_uuid"])
 
 # There should be DHCPv4/v6 OF flows for the ls1-lp_ext1 port in hv1
-AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep table=22 | \
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep table=23 | \
 grep controller | grep "0a.00.00.06" | grep reg14=0x$ln_public_key | \
 wc -l], [0], [3
 ])
-AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep table=22 | \
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep table=23 | \
 grep controller | grep tp_src=546 | grep \
 "ae.70.00.00.00.00.00.00.00.00.00.00.00.00.00.06" | \
 grep reg14=0x$ln_public_key | wc -l], [0], [1
 ])
 
 # There should be no DHCPv4/v6 flows for ls1-lp_ext1 on hv2
-AT_CHECK([as hv2 ovs-ofctl dump-flows br-int | grep table=22 | \
+AT_CHECK([as hv2 ovs-ofctl dump-flows br-int | grep table=23 | \
 grep controller | grep "0a.00.00.06" | wc -l], [0], [0
 ])
-AT_CHECK([as hv2 ovs-ofctl dump-flows br-int | grep table=22 | \
+AT_CHECK([as hv2 ovs-ofctl dump-flows br-int | grep table=23 | \
 grep controller | grep tp_src=546 | grep \
 "ae.70.00.00.00.00.00.00.00.00.00.00.00.00.00.06" | wc -l], [0], [0
 ])
 
 # No DHCPv4/v6 flows for the external port - ls1-lp_ext2 - 10.0.0.7 in hv1 and
 # hv2 as requested-chassis option is not set.
-AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep table=22 | \
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep table=23 | \
 grep controller | grep "0a.00.00.07" | wc -l], [0], [0
 ])
-AT_CHECK([as hv2 ovs-ofctl dump-flows br-int | grep table=22 | \
+AT_CHECK([as hv2 ovs-ofctl dump-flows br-int | grep table=23 | \
 grep controller | grep "0a.00.00.07" | wc -l], [0], [0
 ])
-AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep table=22 | \
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep table=23 | \
 grep controller | grep tp_src=546 | grep \
 "ae.70.00.00.00.00.00.00.00.00.00.00.00.00.00.07" | wc -l], [0], [0
 ])
-AT_CHECK([as hv2 ovs-ofctl dump-flows br-int | grep table=22 | \
+AT_CHECK([as hv2 ovs-ofctl dump-flows br-int | grep table=23 | \
 grep controller | grep tp_src=546 | grep \
 "ae.70.00.00.00.00.00.00.00.00.00.00.00.00.00.07" | wc -l], [0], [0
 ])
@@ -14464,21 +14464,21 @@ logical_port=ls1-lp_ext1`
     test "$chassis" = "$hv2_uuid"])
 
 # There should be OF flows for DHCP4/v6 for the ls1-lp_ext1 port in hv2
-AT_CHECK([as hv2 ovs-ofctl dump-flows br-int | grep table=22 | \
+AT_CHECK([as hv2 ovs-ofctl dump-flows br-int | grep table=23 | \
 grep controller | grep "0a.00.00.06" | grep reg14=0x$ln_public_key | \
 wc -l], [0], [3
 ])
-AT_CHECK([as hv2 ovs-ofctl dump-flows br-int | grep table=22 | \
+AT_CHECK([as hv2 ovs-ofctl dump-flows br-int | grep table=23 | \
 grep controller | grep tp_src=546 | grep \
 "ae.70.00.00.00.00.00.00.00.00.00.00.00.00.00.06" | \
 grep reg14=0x$ln_public_key | wc -l], [0], [1
 ])
 
 # There should be no DHCPv4/v6 flows for ls1-lp_ext1 on hv1
-AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep table=22 | \
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep table=23 | \
 grep controller | grep "0a.00.00.06" | wc -l], [0], [0
 ])
-AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep table=22 | \
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep table=23 | \
 grep controller | grep tp_src=546 | grep \
 "ae.70.00.00.00.00.00.00.00.00.00.00.00.00.00.06" | \
 grep reg14=0x$ln_public_key | wc -l], [0], [0
@@ -15955,9 +15955,9 @@ ovn-nbctl --wait=hv sync
 ovn-sbctl dump-flows sw0 | grep ls_in_arp_rsp | grep bind_vport > lflows.txt
 
 AT_CHECK([cat lflows.txt], [0], [dnl
-  table=13(ls_in_arp_rsp      ), priority=100  , match=(inport == "sw0-p1" && ((arp.op == 1 && arp.spa == 10.0.0.10 && arp.tpa == 10.0.0.10) || (arp.op == 2 && arp.spa == 10.0.0.10))), action=(bind_vport("sw0-vir", inport); next;)
-  table=13(ls_in_arp_rsp      ), priority=100  , match=(inport == "sw0-p2" && ((arp.op == 1 && arp.spa == 10.0.0.10 && arp.tpa == 10.0.0.10) || (arp.op == 2 && arp.spa == 10.0.0.10))), action=(bind_vport("sw0-vir", inport); next;)
-  table=13(ls_in_arp_rsp      ), priority=100  , match=(inport == "sw0-p3" && ((arp.op == 1 && arp.spa == 10.0.0.10 && arp.tpa == 10.0.0.10) || (arp.op == 2 && arp.spa == 10.0.0.10))), action=(bind_vport("sw0-vir", inport); next;)
+  table=14(ls_in_arp_rsp      ), priority=100  , match=(inport == "sw0-p1" && ((arp.op == 1 && arp.spa == 10.0.0.10 && arp.tpa == 10.0.0.10) || (arp.op == 2 && arp.spa == 10.0.0.10))), action=(bind_vport("sw0-vir", inport); next;)
+  table=14(ls_in_arp_rsp      ), priority=100  , match=(inport == "sw0-p2" && ((arp.op == 1 && arp.spa == 10.0.0.10 && arp.tpa == 10.0.0.10) || (arp.op == 2 && arp.spa == 10.0.0.10))), action=(bind_vport("sw0-vir", inport); next;)
+  table=14(ls_in_arp_rsp      ), priority=100  , match=(inport == "sw0-p3" && ((arp.op == 1 && arp.spa == 10.0.0.10 && arp.tpa == 10.0.0.10) || (arp.op == 2 && arp.spa == 10.0.0.10))), action=(bind_vport("sw0-vir", inport); next;)
 ])
 
 ovn-sbctl dump-flows lr0 | grep lr_in_arp_resolve | grep "reg0 == 10.0.0.10" \
@@ -16167,8 +16167,8 @@ ovn-nbctl --wait=hv set logical_switch_port sw0-vir options:virtual-ip=10.0.0.10
 ovn-sbctl dump-flows sw0 | grep ls_in_arp_rsp | grep bind_vport > lflows.txt
 
 AT_CHECK([cat lflows.txt], [0], [dnl
-  table=13(ls_in_arp_rsp      ), priority=100  , match=(inport == "sw0-p1" && ((arp.op == 1 && arp.spa == 10.0.0.10 && arp.tpa == 10.0.0.10) || (arp.op == 2 && arp.spa == 10.0.0.10))), action=(bind_vport("sw0-vir", inport); next;)
-  table=13(ls_in_arp_rsp      ), priority=100  , match=(inport == "sw0-p3" && ((arp.op == 1 && arp.spa == 10.0.0.10 && arp.tpa == 10.0.0.10) || (arp.op == 2 && arp.spa == 10.0.0.10))), action=(bind_vport("sw0-vir", inport); next;)
+  table=14(ls_in_arp_rsp      ), priority=100  , match=(inport == "sw0-p1" && ((arp.op == 1 && arp.spa == 10.0.0.10 && arp.tpa == 10.0.0.10) || (arp.op == 2 && arp.spa == 10.0.0.10))), action=(bind_vport("sw0-vir", inport); next;)
+  table=14(ls_in_arp_rsp      ), priority=100  , match=(inport == "sw0-p3" && ((arp.op == 1 && arp.spa == 10.0.0.10 && arp.tpa == 10.0.0.10) || (arp.op == 2 && arp.spa == 10.0.0.10))), action=(bind_vport("sw0-vir", inport); next;)
 ])
 
 ovn-nbctl --wait=hv remove logical_switch_port sw0-vir options virtual-parents
@@ -18857,7 +18857,7 @@ service_monitor | sed '/^$/d' | wc -l`])
 
 ovn-sbctl dump-flows sw0 | grep ct_lb | grep priority=120 > lflows.txt
 AT_CHECK([cat lflows.txt], [0], [dnl
-  table=10(ls_in_stateful     ), priority=120  , match=(ct.new && ip4.dst == 10.0.0.10 && tcp.dst == 80), action=(ct_lb(backends=10.0.0.3:80,20.0.0.3:80);)
+  table=10(ls_in_stateful     ), priority=120  , match=(ct.new && ip4.dst == 10.0.0.10 && tcp.dst == 80), action=(reg0[[7]] = 1; ct_lb(backends=10.0.0.3:80,20.0.0.3:80);)
 ])
 
 ovn-sbctl dump-flows lr0 | grep ct_lb | grep priority=120 > lflows.txt

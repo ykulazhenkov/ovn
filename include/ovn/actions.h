@@ -61,6 +61,8 @@ struct ovn_extend_table;
     OVNACT(CT_DNAT,           ovnact_ct_nat)          \
     OVNACT(CT_SNAT,           ovnact_ct_nat)          \
     OVNACT(CT_LB,             ovnact_ct_lb)           \
+    OVNACT(CT_SAVE,           ovnact_ct_save)         \
+    OVNACT(CT_IS_SAVED,       ovnact_ct_is_saved)     \
     OVNACT(SELECT,            ovnact_select)          \
     OVNACT(CT_CLEAR,          ovnact_null)            \
     OVNACT(CLONE,             ovnact_nest)            \
@@ -393,6 +395,20 @@ struct ovnact_fwd_group {
     uint8_t ltable;           /* Logical table ID of next table. */
 };
 
+struct ovnact_ct_save {
+    struct ovnact ovnact;
+    struct expr_field src_ip;       /* 32-bit or 128-bit IP address. */
+    struct expr_field dst_ip;       /* 32-bit or 128-bit IP address. */
+};
+
+struct ovnact_ct_is_saved {
+    struct ovnact ovnact;
+    struct expr_field src_ip;       /* 32-bit or 128-bit IP address. */
+    struct expr_field dst_ip;       /* 32-bit or 128-bit IP address. */
+    struct expr_field dst;      /* 1-bit destination field. */
+    bool ip6;
+};
+
 /* Internal use by the helpers below. */
 void ovnact_init(struct ovnact *, enum ovnact_type, size_t len);
 void *ovnact_put(struct ofpbuf *, enum ovnact_type, size_t len);
@@ -706,6 +722,8 @@ struct ovnact_encode_params {
                                    resubmit. */
     uint8_t mac_lookup_ptable;  /* OpenFlow table for
                                    'lookup_arp'/'lookup_nd' to resubmit. */
+    uint8_t ct_save_table; /* OpenFlow table where learn flows are added to
+                            * save the conntrack state. */
 };
 
 void ovnacts_encode(const struct ovnact[], size_t ovnacts_len,

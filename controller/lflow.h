@@ -68,6 +68,7 @@ struct uuid;
 #define OFTABLE_LOG_TO_PHY           65
 #define OFTABLE_MAC_BINDING          66
 #define OFTABLE_MAC_LOOKUP           67
+#define OFTABLE_CT_SAVE              68
 
 /* The number of tables for the ingress and egress pipelines. */
 #define LOG_PIPELINE_LEN 24

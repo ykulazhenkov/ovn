@@ -1667,6 +1667,11 @@
         </li>
 
         <li>
+          <code>allow-reply</code>: Forward the packet and related traffic
+          (e.g. inbound replies to an outbound connection).
+        </li>
+
+        <li>
           <code>drop</code>: Silently drop the packet.
         </li>
 

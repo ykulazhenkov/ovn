@@ -24,6 +24,7 @@
 #include "extend-table.h"
 #include "ovn-l7.h"
 #include "hash.h"
+#include "lib/learn.h"
 #include "lib/packets.h"
 #include "nx-match.h"
 #include "openvswitch/dynamic-string.h"
@@ -3355,6 +3356,155 @@ ovnact_fwd_group_free(struct ovnact_fwd_group *fwd_group)
     free(fwd_group->child_ports);
 }
 
+static void
+parse_ct_save(struct action_context *ctx,  struct ovnact_ct_save *ct_save)
+{
+    if (!lexer_force_match(ctx->lexer, LEX_T_LPAREN)) {
+        return;
+    }
+
+     /* First check for IPv4 src/dst fields. */
+    if (action_parse_field(ctx, 32, false, &ct_save->src_ip)) {
+        lexer_force_match(ctx->lexer, LEX_T_COMMA);
+        action_parse_field(ctx, 32, false, &ct_save->dst_ip);
+        lexer_force_match(ctx->lexer, LEX_T_RPAREN);
+        add_prerequisite(ctx, "ip4");
+    } else {
+        free(ctx->lexer->error);
+        /* Check for IPv6 src/dst fields. */
+        action_parse_field(ctx, 128, false, &ct_save->src_ip);
+        lexer_force_match(ctx->lexer, LEX_T_COMMA);
+        action_parse_field(ctx, 128, false, &ct_save->dst_ip);
+        lexer_force_match(ctx->lexer, LEX_T_RPAREN);
+        add_prerequisite(ctx, "ip6");
+    }
+}
+
+static void
+format_CT_SAVE(const struct ovnact_ct_save *ct_save, struct ds *s)
+{
+    ds_put_cstr(s, "ct_save(");
+    expr_field_format(&ct_save->src_ip, s);
+    ds_put_cstr(s, ", ");
+    expr_field_format(&ct_save->dst_ip, s);
+    ds_put_cstr(s, ");");
+}
+
+
+static void
+encode_CT_SAVE(const struct ovnact_ct_save *a OVS_UNUSED,
+               const struct ovnact_encode_params *ep OVS_UNUSED,
+               struct ofpbuf *ofpacts)
+{
+    int table_id = 68;
+    struct ds learn = DS_EMPTY_INITIALIZER;
+    ds_put_format(&learn, "table=%d,hard_timeout=60,eth_type=0x800,NXM_OF_IP_SRC[]=NXM_OF_IP_DST[],NXM_OF_IP_DST=NXM_OF_IP_SRC[],"
+                  "load:0x1->NXM_NX_REG10[7]",
+                  table_id);
+
+    uint64_t stub[1024 / 8];
+    struct ofpbuf ofpbuf_learn = OFPBUF_STUB_INITIALIZER(stub);
+
+    char *error = learn_parse(ds_cstr(&learn), NULL, NULL, &ofpbuf_learn);
+    if (!error) {
+        ofpbuf_put(ofpacts, ofpbuf_learn.data, ofpbuf_learn.size);
+    }
+
+    free(error);
+    ds_destroy(&learn);
+    ofpbuf_uninit(&ofpbuf_learn);
+}
+
+static void
+ovnact_ct_save_free(struct ovnact_ct_save *a OVS_UNUSED)
+{
+}
+
+static void
+parse_ct_is_saved(struct action_context *ctx, const struct expr_field *dst,
+                  struct ovnact_ct_is_saved *ct_saved)
+{
+    /* Validate that the destination is a 1-bit, modifiable field. */
+    char *error = expr_type_check(dst, 1, true);
+    if (error) {
+        lexer_error(ctx->lexer, "%s", error);
+        free(error);
+        return;
+    }
+
+    lexer_get(ctx->lexer); /* Skip ct_is_saved. */
+    lexer_get(ctx->lexer); /* Skip '('. */
+
+    if (ctx->lexer->error) {
+        return;
+    }
+
+    /* First check for IPv4 src/dst fields. */
+    if (action_parse_field(ctx, 32, false, &ct_saved->src_ip)) {
+        lexer_force_match(ctx->lexer, LEX_T_COMMA);
+        action_parse_field(ctx, 32, false, &ct_saved->dst_ip);
+        lexer_force_match(ctx->lexer, LEX_T_RPAREN);
+        ct_saved->ip6 = false;
+        add_prerequisite(ctx, "ip4");
+    } else {
+        free(ctx->lexer->error);
+        ctx->lexer->error = NULL;
+        /* Check for IPv6 src/dst fields. */
+        action_parse_field(ctx, 128, false, &ct_saved->src_ip);
+        lexer_force_match(ctx->lexer, LEX_T_COMMA);
+        action_parse_field(ctx, 128, false, &ct_saved->dst_ip);
+        lexer_force_match(ctx->lexer, LEX_T_RPAREN);
+        ct_saved->ip6 = true;
+        add_prerequisite(ctx, "ip6");
+    }
+
+    ct_saved->dst = *dst;
+}
+
+static void
+format_CT_IS_SAVED(const struct ovnact_ct_is_saved *ct_saved,
+               struct ds *s)
+{
+    expr_field_format(&ct_saved->dst, s);
+    ds_put_cstr(s, " = ct_is_saved(");
+    expr_field_format(&ct_saved->src_ip, s);
+    ds_put_cstr(s, ", ");
+    expr_field_format(&ct_saved->dst_ip, s);
+    ds_put_cstr(s, ");");
+}
+
+static void
+encode_CT_IS_SAVED(const struct ovnact_ct_is_saved *ct_saved,
+                   const struct ovnact_encode_params *ep OVS_UNUSED,
+                   struct ofpbuf *ofpacts OVS_UNUSED)
+{
+    const struct arg args[] = {
+        { expr_resolve_field(&ct_saved->src_ip),
+                             ct_saved->ip6 ? MFF_IPV6_SRC : MFF_IPV4_SRC },
+        { expr_resolve_field(&ct_saved->dst_ip),
+                             ct_saved->ip6 ? MFF_IPV6_SRC : MFF_IPV4_DST },
+    };
+
+    encode_setup_args(args, ARRAY_SIZE(args), ofpacts);
+
+    struct mf_subfield dst = expr_resolve_field(&ct_saved->dst);
+    ovs_assert(dst.field);
+
+    put_load(0, MFF_LOG_FLAGS, MLF_LOOKUP_CT_SAVE_BIT, 1, ofpacts);
+    emit_resubmit(ofpacts, ep->ct_save_table);
+
+    struct ofpact_reg_move *orm = ofpact_put_REG_MOVE(ofpacts);
+    orm->dst = dst;
+    orm->src.field = mf_from_id(MFF_LOG_FLAGS);
+    orm->src.ofs = MLF_LOOKUP_CT_SAVE_BIT;
+    orm->src.n_bits = 1;
+}
+
+static void
+ovnact_ct_is_saved_free(struct ovnact_ct_is_saved *a OVS_UNUSED)
+{
+}
+
 /* Parses an assignment or exchange or put_dhcp_opts action. */
 static void
 parse_set_action(struct action_context *ctx)
@@ -3399,6 +3549,9 @@ parse_set_action(struct action_context *ctx)
                 && lexer_lookahead(ctx->lexer) == LEX_T_LPAREN) {
             parse_lookup_mac_bind(ctx, &lhs, 128,
                                   ovnact_put_LOOKUP_ND(ctx->ovnacts));
+        } else if (!strcmp(ctx->lexer->token.s, "ct_is_saved")
+                && lexer_lookahead(ctx->lexer) == LEX_T_LPAREN) {
+            parse_ct_is_saved(ctx, &lhs, ovnact_put_CT_IS_SAVED(ctx->ovnacts));
         } else {
             parse_assignment_action(ctx, false, &lhs);
         }
@@ -3481,6 +3634,8 @@ parse_action(struct action_context *ctx)
         parse_fwd_group_action(ctx);
     } else if (lexer_match_id(ctx->lexer, "handle_dhcpv6_reply")) {
         ovnact_put_DHCP6_REPLY(ctx->ovnacts);
+    } else if (lexer_match_id(ctx->lexer, "ct_save")) {
+        parse_ct_save(ctx, ovnact_put_CT_SAVE(ctx->ovnacts));
     } else {
         lexer_syntax_error(ctx->lexer, "expecting action");
     }

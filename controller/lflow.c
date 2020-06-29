@@ -646,6 +646,7 @@ consider_logical_flow(const struct sbrec_logical_flow *lflow,
         .output_ptable = output_ptable,
         .mac_bind_ptable = OFTABLE_MAC_BINDING,
         .mac_lookup_ptable = OFTABLE_MAC_LOOKUP,
+        .ct_save_table = OFTABLE_CT_SAVE,
     };
     ovnacts_encode(ovnacts.data, ovnacts.size, &ep, &ofpacts);
     ovnacts_free(ovnacts.data, ovnacts.size);
