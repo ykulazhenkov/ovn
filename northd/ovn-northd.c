@@ -134,35 +134,37 @@ enum ovn_stage {
     PIPELINE_STAGE(SWITCH, IN,  PORT_SEC_L2,    0, "ls_in_port_sec_l2")   \
     PIPELINE_STAGE(SWITCH, IN,  PORT_SEC_IP,    1, "ls_in_port_sec_ip")   \
     PIPELINE_STAGE(SWITCH, IN,  PORT_SEC_ND,    2, "ls_in_port_sec_nd")   \
-    PIPELINE_STAGE(SWITCH, IN,  PRE_ACL,        3, "ls_in_pre_acl")       \
-    PIPELINE_STAGE(SWITCH, IN,  PRE_LB,         4, "ls_in_pre_lb")        \
-    PIPELINE_STAGE(SWITCH, IN,  PRE_STATEFUL,   5, "ls_in_pre_stateful")  \
-    PIPELINE_STAGE(SWITCH, IN,  ACL,            6, "ls_in_acl")           \
-    PIPELINE_STAGE(SWITCH, IN,  QOS_MARK,       7, "ls_in_qos_mark")      \
-    PIPELINE_STAGE(SWITCH, IN,  QOS_METER,      8, "ls_in_qos_meter")     \
-    PIPELINE_STAGE(SWITCH, IN,  LB,             9, "ls_in_lb")            \
-    PIPELINE_STAGE(SWITCH, IN,  STATEFUL,      10, "ls_in_stateful")      \
-    PIPELINE_STAGE(SWITCH, IN,  PRE_HAIRPIN,   11, "ls_in_pre_hairpin")   \
-    PIPELINE_STAGE(SWITCH, IN,  HAIRPIN,       12, "ls_in_hairpin")       \
-    PIPELINE_STAGE(SWITCH, IN,  ARP_ND_RSP,    13, "ls_in_arp_rsp")       \
-    PIPELINE_STAGE(SWITCH, IN,  DHCP_OPTIONS,  14, "ls_in_dhcp_options")  \
-    PIPELINE_STAGE(SWITCH, IN,  DHCP_RESPONSE, 15, "ls_in_dhcp_response") \
-    PIPELINE_STAGE(SWITCH, IN,  DNS_LOOKUP,    16, "ls_in_dns_lookup")    \
-    PIPELINE_STAGE(SWITCH, IN,  DNS_RESPONSE,  17, "ls_in_dns_response")  \
-    PIPELINE_STAGE(SWITCH, IN,  EXTERNAL_PORT, 18, "ls_in_external_port") \
-    PIPELINE_STAGE(SWITCH, IN,  L2_LKUP,       19, "ls_in_l2_lkup")       \
+    PIPELINE_STAGE(SWITCH, IN,  SKIP_CT,        3, "ls_in_skip_ct")   \
+    PIPELINE_STAGE(SWITCH, IN,  PRE_ACL,        4, "ls_in_pre_acl")       \
+    PIPELINE_STAGE(SWITCH, IN,  PRE_LB,         5, "ls_in_pre_lb")        \
+    PIPELINE_STAGE(SWITCH, IN,  PRE_STATEFUL,   6, "ls_in_pre_stateful")  \
+    PIPELINE_STAGE(SWITCH, IN,  ACL,            7, "ls_in_acl")           \
+    PIPELINE_STAGE(SWITCH, IN,  QOS_MARK,       8, "ls_in_qos_mark")      \
+    PIPELINE_STAGE(SWITCH, IN,  QOS_METER,      9, "ls_in_qos_meter")     \
+    PIPELINE_STAGE(SWITCH, IN,  LB,            10, "ls_in_lb")            \
+    PIPELINE_STAGE(SWITCH, IN,  STATEFUL,      11, "ls_in_stateful")      \
+    PIPELINE_STAGE(SWITCH, IN,  PRE_HAIRPIN,   12, "ls_in_pre_hairpin")   \
+    PIPELINE_STAGE(SWITCH, IN,  HAIRPIN,       13, "ls_in_hairpin")       \
+    PIPELINE_STAGE(SWITCH, IN,  ARP_ND_RSP,    14, "ls_in_arp_rsp")       \
+    PIPELINE_STAGE(SWITCH, IN,  DHCP_OPTIONS,  15, "ls_in_dhcp_options")  \
+    PIPELINE_STAGE(SWITCH, IN,  DHCP_RESPONSE, 16, "ls_in_dhcp_response") \
+    PIPELINE_STAGE(SWITCH, IN,  DNS_LOOKUP,    17, "ls_in_dns_lookup")    \
+    PIPELINE_STAGE(SWITCH, IN,  DNS_RESPONSE,  18, "ls_in_dns_response")  \
+    PIPELINE_STAGE(SWITCH, IN,  EXTERNAL_PORT, 19, "ls_in_external_port") \
+    PIPELINE_STAGE(SWITCH, IN,  L2_LKUP,       20, "ls_in_l2_lkup")       \
                                                                           \
     /* Logical switch egress stages. */                                   \
-    PIPELINE_STAGE(SWITCH, OUT, PRE_LB,       0, "ls_out_pre_lb")         \
-    PIPELINE_STAGE(SWITCH, OUT, PRE_ACL,      1, "ls_out_pre_acl")        \
-    PIPELINE_STAGE(SWITCH, OUT, PRE_STATEFUL, 2, "ls_out_pre_stateful")   \
-    PIPELINE_STAGE(SWITCH, OUT, LB,           3, "ls_out_lb")             \
-    PIPELINE_STAGE(SWITCH, OUT, ACL,          4, "ls_out_acl")            \
-    PIPELINE_STAGE(SWITCH, OUT, QOS_MARK,     5, "ls_out_qos_mark")       \
-    PIPELINE_STAGE(SWITCH, OUT, QOS_METER,    6, "ls_out_qos_meter")      \
-    PIPELINE_STAGE(SWITCH, OUT, STATEFUL,     7, "ls_out_stateful")       \
-    PIPELINE_STAGE(SWITCH, OUT, PORT_SEC_IP,  8, "ls_out_port_sec_ip")    \
-    PIPELINE_STAGE(SWITCH, OUT, PORT_SEC_L2,  9, "ls_out_port_sec_l2")    \
+    PIPELINE_STAGE(SWITCH, OUT, SKIP_CT,      0, "ls_out_skip_ct")         \
+    PIPELINE_STAGE(SWITCH, OUT, PRE_LB,       1, "ls_out_pre_lb")         \
+    PIPELINE_STAGE(SWITCH, OUT, PRE_ACL,      2, "ls_out_pre_acl")        \
+    PIPELINE_STAGE(SWITCH, OUT, PRE_STATEFUL, 3, "ls_out_pre_stateful")   \
+    PIPELINE_STAGE(SWITCH, OUT, LB,           4, "ls_out_lb")             \
+    PIPELINE_STAGE(SWITCH, OUT, ACL,          5, "ls_out_acl")            \
+    PIPELINE_STAGE(SWITCH, OUT, QOS_MARK,     6, "ls_out_qos_mark")       \
+    PIPELINE_STAGE(SWITCH, OUT, QOS_METER,    7, "ls_out_qos_meter")      \
+    PIPELINE_STAGE(SWITCH, OUT, STATEFUL,     8, "ls_out_stateful")       \
+    PIPELINE_STAGE(SWITCH, OUT, PORT_SEC_IP,  9, "ls_out_port_sec_ip")    \
+    PIPELINE_STAGE(SWITCH, OUT, PORT_SEC_L2,  10, "ls_out_port_sec_l2")    \
                                                                       \
     /* Logical router ingress stages. */                              \
     PIPELINE_STAGE(ROUTER, IN,  ADMISSION,       0, "lr_in_admission")    \
@@ -4519,7 +4521,8 @@ build_dhcpv4_action(struct ovn_port *op, ovs_be32 offer_ip,
 
     ds_put_format(response_action, "eth.dst = eth.src; eth.src = %s; "
                   "ip4.src = %s; udp.src = 67; udp.dst = 68; "
-                  "outport = inport; flags.loopback = 1; output;",
+                  "outport = inport; flags.loopback = 1; "
+                  "next(pipeline=egress,table=9);",
                   server_mac, server_ip);
 
     ds_put_format(ipv4_addr_match,
@@ -4604,7 +4607,7 @@ build_dhcpv6_action(struct ovn_port *op, struct in6_addr *offer_ip,
     ds_put_format(response_action, "eth.dst = eth.src; eth.src = %s; "
                   "ip6.dst = ip6.src; ip6.src = %s; udp.src = 547; "
                   "udp.dst = 546; outport = inport; flags.loopback = 1; "
-                  "output;",
+                  "next(pipeline=egress,table=9);",
                   server_mac, server_ip);
 
     return true;
@@ -4850,8 +4853,8 @@ build_lswitch_output_port_sec(struct hmap *ports, struct hmap *datapaths,
 }
 
 static void
-build_pre_acl_flows(struct ovn_datapath *od, struct ovn_port *op,
-                    struct hmap *lflows)
+build_skip_acl_flows(struct ovn_datapath *od, struct ovn_port *op,
+                     struct hmap *lflows)
 {
     /* Can't use ct() for router ports. Consider the following configuration:
      * lp1(10.0.0.2) on hostA--ls1--lr0--ls2--lp2(10.0.1.2) on hostB, For a
@@ -4867,11 +4870,13 @@ build_pre_acl_flows(struct ovn_datapath *od, struct ovn_port *op,
 
     ds_put_format(&match_in, "ip && inport == %s", op->json_key);
     ds_put_format(&match_out, "ip && outport == %s", op->json_key);
-    ovn_lflow_add_with_hint(lflows, od, S_SWITCH_IN_PRE_ACL, 110,
-                            ds_cstr(&match_in), "next;",
+    ovn_lflow_add_with_hint(lflows, od, S_SWITCH_IN_SKIP_CT, 110,
+                            ds_cstr(&match_in),
+                            "next(pipeline=ingress,table=14);",
                             &op->nbsp->header_);
-    ovn_lflow_add_with_hint(lflows, od, S_SWITCH_OUT_PRE_ACL, 110,
-                            ds_cstr(&match_out), "next;",
+    ovn_lflow_add_with_hint(lflows, od, S_SWITCH_OUT_SKIP_CT, 110,
+                            ds_cstr(&match_out),
+                            "next(pipeline=egress,table=9);",
                             &op->nbsp->header_);
 
     ds_destroy(&match_in);
@@ -4879,47 +4884,58 @@ build_pre_acl_flows(struct ovn_datapath *od, struct ovn_port *op,
 }
 
 static void
-build_pre_acls(struct ovn_datapath *od, struct hmap *lflows)
+build_skip_ct(struct ovn_datapath *od, bool has_stateful, struct hmap *lflows)
 {
-    bool has_stateful = has_stateful_acl(od);
+    ovn_lflow_add(lflows, od, S_SWITCH_IN_SKIP_CT, 0, "1", "next;");
+    ovn_lflow_add(lflows, od, S_SWITCH_OUT_SKIP_CT, 0, "1", "next;");
 
+    const char *ingress_action = "next(pipeline=ingress,table=14);";
+    const char *egress_action = "next(pipeline=egress,table=9);";
+
+    /* Do not send service monitor packets to conntrack. */
+    char *svc_check_match = xasprintf("eth.dst == %s", svc_monitor_mac);
+    ovn_lflow_add(lflows, od, S_SWITCH_IN_SKIP_CT, 110, svc_check_match,
+                  ingress_action);
+    free(svc_check_match);
+
+    svc_check_match = xasprintf("eth.src == %s", svc_monitor_mac);
+    ovn_lflow_add(lflows, od, S_SWITCH_OUT_SKIP_CT, 110, svc_check_match,
+                  egress_action);
+    free(svc_check_match);
+
+    /* Skip conntrack on ND and ICMP destination
+     * unreachable packets. */
+    ovn_lflow_add(lflows, od, S_SWITCH_IN_SKIP_CT, 110,
+                  "nd || nd_rs || nd_ra || "
+                  "(ip6 && udp && udp.src == 546 && udp.dst == 547)",
+                  ingress_action);
+    ovn_lflow_add(lflows, od, S_SWITCH_OUT_SKIP_CT, 110,
+                  "nd || nd_rs || nd_ra || "
+                  "(ip6 && udp && udp.src == 546 && udp.dst == 547)",
+                  egress_action);
+
+    if (has_stateful) {
+        for (size_t i = 0; i < od->n_router_ports; i++) {
+            build_skip_acl_flows(od, od->router_ports[i], lflows);
+        }
+        for (size_t i = 0; i < od->n_localnet_ports; i++) {
+            build_skip_acl_flows(od, od->localnet_ports[i], lflows);
+        }
+    }
+}
+
+static void
+build_pre_acls(struct ovn_datapath *od, bool has_stateful, struct hmap *lflows)
+{
     /* Ingress and Egress Pre-ACL Table (Priority 0): Packets are
      * allowed by default. */
     ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_ACL, 0, "1", "next;");
     ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_ACL, 0, "1", "next;");
 
-    char *svc_check_match = xasprintf("eth.dst == %s", svc_monitor_mac);
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_ACL, 110, svc_check_match,
-                  "next;");
-    free(svc_check_match);
-
-    svc_check_match = xasprintf("eth.src == %s", svc_monitor_mac);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_ACL, 110, svc_check_match,
-                  "next;");
-    free(svc_check_match);
-
     /* If there are any stateful ACL rules in this datapath, we must
      * send all IP packets through the conntrack action, which handles
      * defragmentation, in order to match L4 headers. */
     if (has_stateful) {
-        for (size_t i = 0; i < od->n_router_ports; i++) {
-            build_pre_acl_flows(od, od->router_ports[i], lflows);
-        }
-        for (size_t i = 0; i < od->n_localnet_ports; i++) {
-            build_pre_acl_flows(od, od->localnet_ports[i], lflows);
-        }
-
-        /* Ingress and Egress Pre-ACL Table (Priority 110).
-         *
-         * Not to do conntrack on ND and ICMP destination
-         * unreachable packets. */
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_ACL, 110,
-                      "nd || nd_rs || nd_ra || "
-                      "(udp && udp.src == 546 && udp.dst == 547)", "next;");
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_ACL, 110,
-                      "nd || nd_rs || nd_ra || "
-                      "(udp && udp.src == 546 && udp.dst == 547)", "next;");
-
         /* Ingress and Egress Pre-ACL Table (Priority 100).
          *
          * Regardless of whether the ACL is "from-lport" or "to-lport",
@@ -5027,25 +5043,6 @@ static void
 build_pre_lb(struct ovn_datapath *od, struct hmap *lflows,
              struct shash *meter_groups, struct hmap *lbs)
 {
-    /* Do not send ND packets to conntrack */
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_LB, 110,
-                  "nd || nd_rs || nd_ra",
-                  "next;");
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_LB, 110,
-                  "nd || nd_rs || nd_ra",
-                  "next;");
-
-    /* Do not send service monitor packets to conntrack. */
-    char *svc_check_match = xasprintf("eth.dst == %s", svc_monitor_mac);
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_LB, 110,
-                  svc_check_match, "next;");
-    free(svc_check_match);
-
-    svc_check_match = xasprintf("eth.src == %s", svc_monitor_mac);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_LB, 110,
-                  svc_check_match, "next;");
-    free(svc_check_match);
-
     /* Allow all packets to go to next tables by default. */
     ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_LB, 0, "1", "next;");
     ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_LB, 0, "1", "next;");
@@ -5457,11 +5454,9 @@ build_port_group_lswitches(struct northd_context *ctx, struct hmap *pgs,
 }
 
 static void
-build_acls(struct ovn_datapath *od, struct hmap *lflows,
+build_acls(struct ovn_datapath *od, bool has_stateful, struct hmap *lflows,
            struct hmap *port_groups)
 {
-    bool has_stateful = has_stateful_acl(od);
-
     /* Ingress and Egress ACL Table (Priority 0): Packets are allowed by
      * default.  A related rule at priority 1 is added below if there
      * are any stateful ACLs in this datapath. */
@@ -5548,14 +5543,6 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows,
                       "!ct.est && ct.rel && !ct.new && !ct.inv "
                       "&& ct_label.blocked == 0",
                       "next;");
-
-        /* Ingress and Egress ACL Table (Priority 65535).
-         *
-         * Not to do conntrack on ND packets. */
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, UINT16_MAX,
-                      "nd || nd_ra || nd_rs", "next;");
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, UINT16_MAX,
-                      "nd || nd_ra || nd_rs", "next;");
     }
 
     /* Ingress or Egress ACL Table (Various priorities). */
@@ -5571,88 +5558,6 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows,
             }
         }
     }
-
-    /* Add 34000 priority flow to allow DHCP reply from ovn-controller to all
-     * logical ports of the datapath if the CMS has configured DHCPv4 options.
-     * */
-    for (size_t i = 0; i < od->nbs->n_ports; i++) {
-        if (lsp_is_external(od->nbs->ports[i])) {
-            continue;
-        }
-
-        if (od->nbs->ports[i]->dhcpv4_options) {
-            const char *server_id = smap_get(
-                &od->nbs->ports[i]->dhcpv4_options->options, "server_id");
-            const char *server_mac = smap_get(
-                &od->nbs->ports[i]->dhcpv4_options->options, "server_mac");
-            const char *lease_time = smap_get(
-                &od->nbs->ports[i]->dhcpv4_options->options, "lease_time");
-            if (server_id && server_mac && lease_time) {
-                struct ds match = DS_EMPTY_INITIALIZER;
-                const char *actions =
-                    has_stateful ? "ct_commit; next;" : "next;";
-                ds_put_format(&match, "outport == \"%s\" && eth.src == %s "
-                              "&& ip4.src == %s && udp && udp.src == 67 "
-                              "&& udp.dst == 68", od->nbs->ports[i]->name,
-                              server_mac, server_id);
-                ovn_lflow_add_with_hint(
-                    lflows, od, S_SWITCH_OUT_ACL, 34000, ds_cstr(&match),
-                    actions, &od->nbs->ports[i]->dhcpv4_options->header_);
-                ds_destroy(&match);
-            }
-        }
-
-        if (od->nbs->ports[i]->dhcpv6_options) {
-            const char *server_mac = smap_get(
-                &od->nbs->ports[i]->dhcpv6_options->options, "server_id");
-            struct eth_addr ea;
-            if (server_mac && eth_addr_from_string(server_mac, &ea)) {
-                /* Get the link local IP of the DHCPv6 server from the
-                 * server MAC. */
-                struct in6_addr lla;
-                in6_generate_lla(ea, &lla);
-
-                char server_ip[INET6_ADDRSTRLEN + 1];
-                ipv6_string_mapped(server_ip, &lla);
-
-                struct ds match = DS_EMPTY_INITIALIZER;
-                const char *actions = has_stateful ? "ct_commit; next;" :
-                    "next;";
-                ds_put_format(&match, "outport == \"%s\" && eth.src == %s "
-                              "&& ip6.src == %s && udp && udp.src == 547 "
-                              "&& udp.dst == 546", od->nbs->ports[i]->name,
-                              server_mac, server_ip);
-                ovn_lflow_add_with_hint(
-                    lflows, od, S_SWITCH_OUT_ACL, 34000, ds_cstr(&match),
-                    actions, &od->nbs->ports[i]->dhcpv6_options->header_);
-                ds_destroy(&match);
-            }
-        }
-    }
-
-    /* Add a 34000 priority flow to advance the DNS reply from ovn-controller,
-     * if the CMS has configured DNS records for the datapath.
-     */
-    if (ls_has_dns_records(od->nbs)) {
-        const char *actions = has_stateful ? "ct_commit; next;" : "next;";
-        ovn_lflow_add(
-            lflows, od, S_SWITCH_OUT_ACL, 34000, "udp.src == 53",
-            actions);
-    }
-
-    /* Add a 34000 priority flow to advance the service monitor reply
-     * packets to skip applying ingress ACLs. */
-    char *svc_check_match = xasprintf("eth.dst == %s", svc_monitor_mac);
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, 34000, svc_check_match,
-                  "next;");
-    free(svc_check_match);
-
-    /* Add a 34000 priority flow to advance the service monitor packets
-     * generated by ovn-controller to skip applying egress ACLs. */
-    svc_check_match = xasprintf("eth.src == %s", svc_monitor_mac);
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, 34000, svc_check_match,
-                  "next;");
-    free(svc_check_match);
 }
 
 static void
@@ -6472,10 +6377,12 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
             continue;
         }
 
-        build_pre_acls(od, lflows);
+        bool has_stateful = has_stateful_acl(od);
+        build_skip_ct(od, has_stateful, lflows);
+        build_pre_acls(od, has_stateful, lflows);
         build_pre_lb(od, lflows, meter_groups, lbs);
         build_pre_stateful(od, lflows);
-        build_acls(od, lflows, port_groups);
+        build_acls(od, has_stateful, lflows, port_groups);
         build_qos(od, lflows);
         build_lb(od, lflows);
         build_stateful(od, lflows, lbs);
@@ -6812,13 +6719,15 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         ds_put_cstr(&match, " && "REGBIT_DNS_LOOKUP_RESULT);
         ds_put_format(&action, "eth.dst <-> eth.src; ip4.src <-> ip4.dst; "
                       "udp.dst = udp.src; udp.src = 53; outport = inport; "
-                      "flags.loopback = 1; output;");
+                      "flags.loopback = 1; "
+                      "next(pipeline=egress,table=9);");
         ovn_lflow_add(lflows, od, S_SWITCH_IN_DNS_RESPONSE, 100,
                       ds_cstr(&match), ds_cstr(&action));
         ds_clear(&action);
         ds_put_format(&action, "eth.dst <-> eth.src; ip6.src <-> ip6.dst; "
                       "udp.dst = udp.src; udp.src = 53; outport = inport; "
-                      "flags.loopback = 1; output;");
+                      "flags.loopback = 1; "
+                      "next(pipeline=egress,table=9);");
         ovn_lflow_add(lflows, od, S_SWITCH_IN_DNS_RESPONSE, 100,
                       ds_cstr(&match), ds_cstr(&action));
         ds_destroy(&action);
