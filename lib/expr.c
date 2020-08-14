@@ -2064,9 +2064,9 @@ expr_simplify_relational(struct expr *expr)
 /* Resolves condition and replaces the expression with a boolean. */
 static struct expr *
 expr_evaluate_condition__(struct expr *expr,
-                          bool (*is_chassis_resident)(const void *c_aux,
-                                                    const char *port_name),
-                          const void *c_aux)
+                          bool (*is_chassis_resident)(void *c_aux,
+                                                     const char *port_name),
+                          void *c_aux)
 {
     bool result;
 
@@ -2086,9 +2086,9 @@ expr_evaluate_condition__(struct expr *expr,
 
 struct expr *
 expr_evaluate_condition(struct expr *expr,
-                        bool (*is_chassis_resident)(const void *c_aux,
+                        bool (*is_chassis_resident)(void *c_aux,
                                                     const char *port_name),
-                        const void *c_aux)
+                        void *c_aux)
 {
     struct expr *sub, *next;
 
@@ -3396,7 +3396,7 @@ expr_resolve_field(const struct expr_field *f)
 }
 
 static bool
-microflow_is_chassis_resident_cb(const void *c_aux OVS_UNUSED,
+microflow_is_chassis_resident_cb(void *c_aux OVS_UNUSED,
                                  const char *port_name OVS_UNUSED)
 {
     /* Assume tests calling expr_parse_microflow are not chassis specific, so

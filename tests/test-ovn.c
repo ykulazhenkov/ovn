@@ -269,7 +269,7 @@ lookup_tunnel_ofport(const void *ports_, const char *port_name,
 }
 
 static bool
-is_chassis_resident_cb(const void *ports_, const char *port_name)
+is_chassis_resident_cb(void *ports_, const char *port_name)
 {
     const struct simap *ports = ports_;
     const struct simap_node *node = simap_find(ports, port_name);
@@ -862,7 +862,7 @@ free_rule(struct test_rule *test_rule)
 }
 
 static bool
-tree_shape_is_chassis_resident_cb(const void *c_aux OVS_UNUSED,
+tree_shape_is_chassis_resident_cb(void *c_aux OVS_UNUSED,
                                   const char *port_name OVS_UNUSED)
 {
     return true;

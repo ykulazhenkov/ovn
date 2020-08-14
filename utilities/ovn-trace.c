@@ -796,7 +796,7 @@ read_port_groups(void)
 }
 
 static bool
-ovntrace_is_chassis_resident(const void *aux OVS_UNUSED,
+ovntrace_is_chassis_resident(void *aux OVS_UNUSED,
                              const char *port_name)
 {
     if (port_name[0] == '\0') {
