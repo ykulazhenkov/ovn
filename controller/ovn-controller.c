@@ -1550,6 +1550,9 @@ struct ed_type_flow_output {
     uint32_t conj_id_ofs;
     /* lflow resource cross reference */
     struct lflow_resource_ref lflow_resource_ref;
+
+    /* Cache of lflow expr tree. */
+    struct hmap lflow_cache_map;
 };
 
 static void init_physical_ctx(struct engine_node *node,
@@ -1700,6 +1703,7 @@ static void init_lflow_ctx(struct engine_node *node,
     l_ctx_out->group_table = &fo->group_table;
     l_ctx_out->meter_table = &fo->meter_table;
     l_ctx_out->lfrr = &fo->lflow_resource_ref;
+    l_ctx_out->lflow_cache_map = &fo->lflow_cache_map;
     l_ctx_out->conj_id_ofs = &fo->conj_id_ofs;
 }
 
@@ -1714,6 +1718,7 @@ en_flow_output_init(struct engine_node *node OVS_UNUSED,
     ovn_extend_table_init(&data->meter_table);
     data->conj_id_ofs = 1;
     lflow_resource_init(&data->lflow_resource_ref);
+    hmap_init(&data->lflow_cache_map);
     return data;
 }
 
@@ -1725,6 +1730,7 @@ en_flow_output_cleanup(void *data)
     ovn_extend_table_destroy(&flow_output_data->group_table);
     ovn_extend_table_destroy(&flow_output_data->meter_table);
     lflow_resource_destroy(&flow_output_data->lflow_resource_ref);
+    lflow_cache_destroy(&flow_output_data->lflow_cache_map);
 }
 
 static void
@@ -1758,7 +1764,6 @@ en_flow_output_run(struct engine_node *node, void *data)
     struct ovn_desired_flow_table *flow_table = &fo->flow_table;
     struct ovn_extend_table *group_table = &fo->group_table;
     struct ovn_extend_table *meter_table = &fo->meter_table;
-    uint32_t *conj_id_ofs = &fo->conj_id_ofs;
     struct lflow_resource_ref *lfrr = &fo->lflow_resource_ref;
 
     static bool first_run = true;
@@ -1771,11 +1776,26 @@ en_flow_output_run(struct engine_node *node, void *data)
         lflow_resource_clear(lfrr);
     }
 
-    *conj_id_ofs = 1;
     struct lflow_ctx_in l_ctx_in;
     struct lflow_ctx_out l_ctx_out;
     init_lflow_ctx(node, rt_data, fo, &l_ctx_in, &l_ctx_out);
-    lflow_run(&l_ctx_in, &l_ctx_out);
+
+    if (!lflow_run(&l_ctx_in, &l_ctx_out)) {
+        /* lflow_run() failed because of conjunction ids overflow.
+         * There can be many holes in between. Destroy lflow cache
+         * and call lflow_run() again. */
+        ovn_desired_flow_table_clear(flow_table);
+        ovn_extend_table_clear(group_table, false /* desired */);
+        ovn_extend_table_clear(meter_table, false /* desired */);
+        lflow_resource_clear(lfrr);
+        fo->conj_id_ofs = 1;
+        lflow_cache_destroy(&fo->lflow_cache_map);
+        hmap_init(&fo->lflow_cache_map);
+        if (!lflow_run(&l_ctx_in, &l_ctx_out)) {
+            VLOG_WARN("Flow translation failed due to conjunction id "
+                      "overflow.");
+        }
+    }
 
     struct physical_ctx p_ctx;
     init_physical_ctx(node, rt_data, &p_ctx);

@@ -148,6 +148,74 @@ is_chassis_resident_cb(const void *c_aux_, const char *port_name)
         return false;
     }
 }
+/* Represents an lflow cache which
+ *  - stores the 'expr' tree for the lflow. Right now 'expr' is not
+ *    stored for lflows referring port groups or address sets.
+ *
+ *  - stores the conjunction ids.
+ *
+ * We don't store the match in this structure because -
+ *   - Whenever a flow match or action needs to be modified,
+ *     ovn-northd deletes the existing flow in the logical_flow
+ *     table and adds a new one.
+ *  We may want to revisit this and store match incase the behavior
+ *  of ovn-northd changes.
+ */
+struct lflow_cache {
+    struct hmap_node node;
+    struct uuid lflow_uuid; /* key */
+    struct expr *expr;
+    uint32_t conj_id_ofs;
+    size_t n_conj_ids;
+};
+
+static struct lflow_cache *
+lflow_cache_add(struct hmap *lflow_cache_map,
+               const struct sbrec_logical_flow *lflow,
+               struct expr *expr)
+{
+    struct lflow_cache *lc = xmalloc(sizeof *lc);
+    lc->lflow_uuid = lflow->header_.uuid;
+    lc->expr = expr;
+    lc->conj_id_ofs = 0;
+    hmap_insert(lflow_cache_map, &lc->node, uuid_hash(&lc->lflow_uuid));
+    return lc;
+}
+
+static struct lflow_cache *
+lflow_cache_get(struct hmap *lflow_cache_map,
+               const struct sbrec_logical_flow *lflow)
+{
+    struct lflow_cache *lc;
+    size_t hash = uuid_hash(&lflow->header_.uuid);
+    HMAP_FOR_EACH_WITH_HASH (lc, node, hash, lflow_cache_map) {
+        if (uuid_equals(&lc->lflow_uuid, &lflow->header_.uuid)) {
+            return lc;
+        }
+    }
+
+    return NULL;
+}
+
+static void
+lflow_cache_delete(struct hmap *lflow_cache_map, struct lflow_cache *lc)
+{
+    hmap_remove(lflow_cache_map, &lc->node);
+    expr_destroy(lc->expr);
+    free(lc);
+}
+
+void
+lflow_cache_destroy(struct hmap *lflow_cache_map)
+{
+    struct lflow_cache *lc;
+    HMAP_FOR_EACH_POP (lc, node, lflow_cache_map) {
+        expr_destroy(lc->expr);
+        free(lc);
+    }
+
+    hmap_destroy(lflow_cache_map);
+}
 
 void
 lflow_resource_init(struct lflow_resource_ref *lfrr)
@@ -270,7 +338,7 @@ lflow_resource_destroy_lflow(struct lflow_resource_ref *lfrr,
 }
 
 /* Adds the logical flows from the Logical_Flow table to flow tables. */
-static void
+static bool
 add_logical_flows(struct lflow_ctx_in *l_ctx_in,
                   struct lflow_ctx_out *l_ctx_out)
 {
@@ -299,6 +367,7 @@ add_logical_flows(struct lflow_ctx_in *l_ctx_in,
     struct controller_event_options controller_event_opts;
     controller_event_opts_init(&controller_event_opts);
 
+    bool success = true;
     SBREC_LOGICAL_FLOW_TABLE_FOR_EACH (lflow, l_ctx_in->logical_flow_table) {
         if (!consider_logical_flow(lflow, &dhcp_opts, &dhcpv6_opts,
                                    &nd_ra_opts, &controller_event_opts,
@@ -306,6 +375,8 @@ add_logical_flows(struct lflow_ctx_in *l_ctx_in,
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
             VLOG_ERR_RL(&rl, "Conjunction id overflow when processing lflow "
                         UUID_FMT, UUID_ARGS(&lflow->header_.uuid));
+            success = false;
+            break;
         }
     }
 
@@ -313,6 +384,7 @@ add_logical_flows(struct lflow_ctx_in *l_ctx_in,
     dhcp_opts_destroy(&dhcpv6_opts);
     nd_ra_opts_destroy(&nd_ra_opts);
     controller_event_opts_destroy(&controller_event_opts);
+    return success;
 }
 
 bool
@@ -355,6 +427,11 @@ lflow_handle_changed_flows(struct lflow_ctx_in *l_ctx_in,
             /* Delete entries from lflow resource reference. */
             lflow_resource_destroy_lflow(l_ctx_out->lfrr,
                                          &lflow->header_.uuid);
+            struct lflow_cache *le =
+                lflow_cache_get(l_ctx_out->lflow_cache_map, lflow);
+            if (le) {
+                lflow_cache_delete(l_ctx_out->lflow_cache_map, le);
+            }
         }
     }
 
@@ -561,44 +638,78 @@ consider_logical_flow(const struct sbrec_logical_flow *lflow,
 
     /* Translate OVN match into table of OpenFlow matches. */
     struct hmap matches;
-    struct expr *expr;
+    struct expr *expr = NULL;
 
-    struct sset addr_sets_ref = SSET_INITIALIZER(&addr_sets_ref);
-    struct sset port_groups_ref = SSET_INITIALIZER(&port_groups_ref);
-    expr = expr_parse_string(lflow->match, &symtab, l_ctx_in->addr_sets,
-                             l_ctx_in->port_groups,
-                             &addr_sets_ref, &port_groups_ref,
-                             lflow->logical_datapath->tunnel_key,
-                             &error);
-    const char *addr_set_name;
-    SSET_FOR_EACH (addr_set_name, &addr_sets_ref) {
-        lflow_resource_add(l_ctx_out->lfrr, REF_TYPE_ADDRSET, addr_set_name,
-                           &lflow->header_.uuid);
+    struct lflow_cache *lc =
+        lflow_cache_get(l_ctx_out->lflow_cache_map, lflow);
+    if (lc) {
+        expr = lc->expr;
     }
-    const char *port_group_name;
-    SSET_FOR_EACH (port_group_name, &port_groups_ref) {
-        lflow_resource_add(l_ctx_out->lfrr, REF_TYPE_PORTGROUP,
-                           port_group_name, &lflow->header_.uuid);
-    }
-    sset_destroy(&addr_sets_ref);
-    sset_destroy(&port_groups_ref);
 
-    if (!error) {
-        if (prereqs) {
-            expr = expr_combine(EXPR_T_AND, expr, prereqs);
-            prereqs = NULL;
+    bool cache_expr = true;
+    if (!expr) {
+        struct sset addr_sets_ref = SSET_INITIALIZER(&addr_sets_ref);
+        struct sset port_groups_ref = SSET_INITIALIZER(&port_groups_ref);
+
+        expr = expr_parse_string(lflow->match, &symtab, l_ctx_in->addr_sets,
+                                 l_ctx_in->port_groups, &addr_sets_ref,
+                                 &port_groups_ref,
+                                 lflow->logical_datapath->tunnel_key, &error);
+        const char *addr_set_name;
+        SSET_FOR_EACH (addr_set_name, &addr_sets_ref) {
+            lflow_resource_add(l_ctx_out->lfrr, REF_TYPE_ADDRSET, addr_set_name,
+                            &lflow->header_.uuid);
         }
-        expr = expr_annotate(expr, &symtab, &error);
-    }
-    if (error) {
-        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
-        VLOG_WARN_RL(&rl, "error parsing match \"%s\": %s",
-                     lflow->match, error);
+        const char *port_group_name;
+        SSET_FOR_EACH (port_group_name, &port_groups_ref) {
+            lflow_resource_add(l_ctx_out->lfrr, REF_TYPE_PORTGROUP,
+                            port_group_name, &lflow->header_.uuid);
+        }
+        sset_destroy(&addr_sets_ref);
+        sset_destroy(&port_groups_ref);
+
+        if (!error) {
+            if (prereqs) {
+                expr = expr_combine(EXPR_T_AND, expr, prereqs);
+                prereqs = NULL;
+            }
+            expr = expr_annotate(expr, &symtab, &error);
+        }
+        if (error) {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+            VLOG_WARN_RL(&rl, "error parsing match \"%s\": %s",
+                        lflow->match, error);
+            expr_destroy(prereqs);
+            free(error);
+            ovnacts_free(ovnacts.data, ovnacts.size);
+            ofpbuf_uninit(&ovnacts);
+            sset_destroy(&addr_sets_ref);
+            sset_destroy(&port_groups_ref);
+            return true;
+        }
+
+        expr = expr_simplify(expr);
+        expr = expr_normalize(expr);
+
+        /* If the lflow references a port group or an address set, then don't
+         * cache the 'expr' in the lflow cache. */
+        cache_expr =
+            sset_is_empty(&port_groups_ref) && sset_is_empty(&addr_sets_ref);
+        if (!lc) {
+            lc = lflow_cache_add(l_ctx_out->lflow_cache_map, lflow,
+                                 cache_expr ? expr : NULL);
+        } else {
+            lc->expr = cache_expr ? expr : NULL;
+        }
+        sset_destroy(&addr_sets_ref);
+        sset_destroy(&port_groups_ref);
+    } else {
         expr_destroy(prereqs);
-        free(error);
-        ovnacts_free(ovnacts.data, ovnacts.size);
-        ofpbuf_uninit(&ovnacts);
-        return true;
+    }
+
+    ovs_assert(lc && expr);
+    if (lc->expr) {
+        expr = expr_clone(lc->expr);
     }
 
     struct lookup_port_aux aux = {
@@ -614,8 +725,7 @@ consider_logical_flow(const struct sbrec_logical_flow *lflow,
         .lflow = lflow,
         .lfrr = l_ctx_out->lfrr
     };
-    expr = expr_simplify(expr);
-    expr = expr_normalize(expr);
+
     expr = expr_evaluate_condition(expr, is_chassis_resident_cb, &cond_aux);
     uint32_t n_conjs = expr_to_matches(expr, lookup_port_cb, &aux,
                                        &matches);
@@ -653,13 +763,23 @@ consider_logical_flow(const struct sbrec_logical_flow *lflow,
     ovnacts_free(ovnacts.data, ovnacts.size);
     ofpbuf_uninit(&ovnacts);
 
+    if (n_conjs && !lc->conj_id_ofs) {
+        lc->conj_id_ofs = *l_ctx_out->conj_id_ofs;
+        if (!update_conj_id_ofs(l_ctx_out->conj_id_ofs, n_conjs)) {
+            lc->conj_id_ofs = 0;
+            expr_matches_destroy(&matches);
+            ofpbuf_uninit(&ofpacts);
+            return false;
+        }
+    }
+
     /* Prepare the OpenFlow matches for adding to the flow table. */
     struct expr_match *m;
     HMAP_FOR_EACH (m, hmap_node, &matches) {
         match_set_metadata(&m->match,
                            htonll(lflow->logical_datapath->tunnel_key));
         if (m->match.wc.masks.conj_id) {
-            m->match.flow.conj_id += *l_ctx_out->conj_id_ofs;
+            m->match.flow.conj_id += lc->conj_id_ofs;
         }
         if (datapath_is_switch(ldp)) {
             unsigned int reg_index
@@ -694,7 +814,7 @@ consider_logical_flow(const struct sbrec_logical_flow *lflow,
                 struct ofpact_conjunction *dst;
 
                 dst = ofpact_put_CONJUNCTION(&conj);
-                dst->id = src->id + *l_ctx_out->conj_id_ofs;
+                dst->id = src->id + lc->conj_id_ofs;
                 dst->clause = src->clause;
                 dst->n_clauses = src->n_clauses;
             }
@@ -709,7 +829,7 @@ consider_logical_flow(const struct sbrec_logical_flow *lflow,
     /* Clean up. */
     expr_matches_destroy(&matches);
     ofpbuf_uninit(&ofpacts);
-    return update_conj_id_ofs(l_ctx_out->conj_id_ofs, n_conjs);
+    return true;
 }
 
 static void
@@ -854,15 +974,33 @@ lflow_handle_changed_neighbors(
 
 /* Translates logical flows in the Logical_Flow table in the OVN_SB database
  * into OpenFlow flows.  See ovn-architecture(7) for more information. */
-void
+bool
 lflow_run(struct lflow_ctx_in *l_ctx_in, struct lflow_ctx_out *l_ctx_out)
 {
     COVERAGE_INC(lflow_run);
 
-    add_logical_flows(l_ctx_in, l_ctx_out);
+    /* when lflow_run is called, it's possible that some of the logical flows
+     * are deleted. We need to delete the lflow expr cache for these lflows,
+     * otherwise, they will not be deleted at all. */
+    const struct sbrec_logical_flow *lflow;
+    SBREC_LOGICAL_FLOW_TABLE_FOR_EACH_TRACKED (lflow,
+                                               l_ctx_in->logical_flow_table) {
+        if (sbrec_logical_flow_is_deleted(lflow)) {
+            struct lflow_cache *le =
+                lflow_cache_get(l_ctx_out->lflow_cache_map, lflow);
+            if (le) {
+                lflow_cache_delete(l_ctx_out->lflow_cache_map, le);
+            }
+        }
+    }
+
+    if (!add_logical_flows(l_ctx_in, l_ctx_out)) {
+        return false;
+    }
     add_neighbor_flows(l_ctx_in->sbrec_port_binding_by_name,
                        l_ctx_in->mac_binding_table, l_ctx_in->local_datapaths,
                        l_ctx_out->flow_table);
+    return true;
 }
 
 void
