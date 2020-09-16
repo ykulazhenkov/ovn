@@ -8725,6 +8725,12 @@ build_ipv4_input_flows_for_lrouter_port(
         struct ovn_port *op, struct hmap *lflows,
         struct ds *match, struct ds *actions);
 
+/* DHCPv6 reply handling */
+static void
+build_dhcpv6_reply_flows_for_lrouter_port(
+        struct ovn_port *op, struct hmap *lflows,
+        struct ds *match);
+
 static void
 build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                     struct hmap *lflows, struct shash *meter_groups,
@@ -8765,25 +8771,9 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                 op, lflows, &match, &actions);
     }
 
-    /* DHCPv6 reply handling */
     HMAP_FOR_EACH (op, key_node, ports) {
-        if (!op->nbrp) {
-            continue;
-        }
-
-        if (op->derived) {
-            continue;
-        }
-
-        for (size_t i = 0; i < op->lrp_networks.n_ipv6_addrs; i++) {
-            ds_clear(&match);
-            ds_put_format(&match, "ip6.dst == %s && udp.src == 547 &&"
-                          " udp.dst == 546",
-                          op->lrp_networks.ipv6_addrs[i].addr_s);
-            ovn_lflow_add(lflows, op->od, S_ROUTER_IN_IP_INPUT, 100,
-                          ds_cstr(&match),
-                          "reg0 = 0; handle_dhcpv6_reply;");
-        }
+        build_dhcpv6_reply_flows_for_lrouter_port(
+                op, lflows, &match);
     }
 
     /* Logical router ingress table 1: IP Input for IPv6. */
@@ -11355,6 +11345,25 @@ build_ipv4_input_flows_for_lrouter_port(
     }
     build_snat_handling_ipv4_input_flows_for_lrouter_port(
             op, lflows, match);
+}
+
+static void
+build_dhcpv6_reply_flows_for_lrouter_port(
+        struct ovn_port *op, struct hmap *lflows,
+        struct ds *match)
+{
+    if (op->nbrp && (!op->derived)) {
+        for (size_t i = 0; i < op->lrp_networks.n_ipv6_addrs; i++) {
+            ds_clear(match);
+            ds_put_format(match, "ip6.dst == %s && udp.src == 547 &&"
+                          " udp.dst == 546",
+                          op->lrp_networks.ipv6_addrs[i].addr_s);
+            ovn_lflow_add(lflows, op->od, S_ROUTER_IN_IP_INPUT, 100,
+                          ds_cstr(match),
+                          "reg0 = 0; handle_dhcpv6_reply;");
+        }
+    }
+
 }
 
 /* Updates the Logical_Flow and Multicast_Group tables in the OVN_SB database,
