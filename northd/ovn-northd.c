@@ -11872,6 +11872,141 @@ sync_dns_entries(struct northd_context *ctx, struct hmap *datapaths)
     }
     hmap_destroy(&dns_map);
 }
+
+/*
+ * struct 'sync_lb_info' is used to sync the load balancer records between
+ * OVN Northbound db and Southbound db.
+ */
+struct sync_lb_info {
+    struct hmap_node hmap_node;
+    const struct nbrec_load_balancer *nlb; /* LB record in the NB db. */
+    const struct sbrec_load_balancer *slb; /* LB record in the SB db. */
+
+    /* Datapaths to which the LB entry is associated with it. */
+    const struct sbrec_datapath_binding **sbs;
+    size_t n_sbs;
+};
+
+static struct sync_lb_info *
+sync_lb_info_find(struct hmap *sync_lb_map, struct uuid *uuid)
+{
+    struct sync_lb_info *lb_info;
+    size_t hash = uuid_hash(uuid);
+    HMAP_FOR_EACH_WITH_HASH (lb_info, hmap_node, hash, sync_lb_map) {
+        if (uuid_equals(&lb_info->nlb->header_.uuid, uuid)) {
+            return lb_info;
+        }
+    }
+
+    return NULL;
+}
+
+static void
+sync_lb_entries(struct northd_context *ctx, struct hmap *datapaths)
+{
+    struct hmap lb_map = HMAP_INITIALIZER(&lb_map);
+    struct ovn_datapath *od;
+
+    /* Build a local hmap of lbs from the NB db. */
+    HMAP_FOR_EACH (od, key_node, datapaths) {
+        if (!od->nbs || !od->nbs->n_load_balancer) {
+            continue;
+        }
+
+        for (size_t i = 0; i < od->nbs->n_load_balancer; i++) {
+            struct sync_lb_info *lb_info =
+                sync_lb_info_find(
+                    &lb_map, &od->nbs->load_balancer[i]->header_.uuid);
+
+            if (!lb_info) {
+                size_t hash = uuid_hash(
+                    &od->nbs->load_balancer[i]->header_.uuid);
+                lb_info = xzalloc(sizeof *lb_info);;
+                lb_info->nlb = od->nbs->load_balancer[i];
+                hmap_insert(&lb_map, &lb_info->hmap_node, hash);
+            }
+
+            lb_info->n_sbs++;
+            lb_info->sbs = xrealloc(lb_info->sbs,
+                                    lb_info->n_sbs * sizeof *lb_info->sbs);
+            lb_info->sbs[lb_info->n_sbs - 1] = od->sb;
+        }
+    }
+
+    /* Delete any stale SB load balancer rows. */
+    const struct sbrec_load_balancer *sbrec_lb, *next;
+    SBREC_LOAD_BALANCER_FOR_EACH_SAFE (sbrec_lb, next, ctx->ovnsb_idl) {
+        const char *nb_lb_uuid = smap_get(&sbrec_lb->external_ids, "lb_id");
+        struct uuid lb_uuid;
+        if (!nb_lb_uuid || !uuid_from_string(&lb_uuid, nb_lb_uuid)) {
+            sbrec_load_balancer_delete(sbrec_lb);
+            continue;
+        }
+
+        struct sync_lb_info *lb_info = sync_lb_info_find(&lb_map, &lb_uuid);
+        if (lb_info) {
+            lb_info->slb = sbrec_lb;
+        } else {
+            sbrec_load_balancer_delete(sbrec_lb);
+        }
+    }
+
+    /* Create SB Load balancer records if not present and sync
+     * the SB load balancer columns. */
+    struct sync_lb_info *lb_info;
+    HMAP_FOR_EACH (lb_info, hmap_node, &lb_map) {
+        if (!lb_info->slb) {
+            sbrec_lb = sbrec_load_balancer_insert(ctx->ovnsb_txn);
+            lb_info->slb = sbrec_lb;
+            char *lb_id = xasprintf(
+                UUID_FMT, UUID_ARGS(&lb_info->nlb->header_.uuid));
+            const struct smap external_ids =
+                SMAP_CONST1(&external_ids, "lb_id", lb_id);
+            sbrec_load_balancer_set_external_ids(sbrec_lb, &external_ids);
+            free(lb_id);
+        }
+
+        /* Set the datapaths and other columns.  If nothing has changed, then
+         * this will be a no-op.
+         */
+        sbrec_load_balancer_set_datapaths(
+            lb_info->slb,
+            (struct sbrec_datapath_binding **)lb_info->sbs,
+            lb_info->n_sbs);
+
+        sbrec_load_balancer_set_name(lb_info->slb, lb_info->nlb->name);
+        sbrec_load_balancer_set_vips(lb_info->slb, &lb_info->nlb->vips);
+        sbrec_load_balancer_set_protocol(lb_info->slb, lb_info->nlb->protocol);
+    }
+
+    /* Set the list of associated load balanacers to a logical switch
+     * datapath binding in the SB DB. */
+    HMAP_FOR_EACH (od, key_node, datapaths) {
+        if (!od->nbs || !od->nbs->n_load_balancer) {
+            continue;
+        }
+
+        const struct sbrec_load_balancer **lbs =
+            xmalloc(od->nbs->n_load_balancer * sizeof *lbs);
+        for (size_t i = 0; i < od->nbs->n_load_balancer; i++) {
+            lb_info = sync_lb_info_find(
+                &lb_map, &od->nbs->load_balancer[i]->header_.uuid);
+            ovs_assert(lb_info);
+            lbs[i] = lb_info->slb;
+        }
+
+        sbrec_datapath_binding_set_load_balancers(
+            od->sb, (struct sbrec_load_balancer **)lbs,
+            od->nbs->n_load_balancer);
+        free(lbs);
+    }
+
+    HMAP_FOR_EACH_POP (lb_info, hmap_node, &lb_map) {
+        free(lb_info->sbs);
+        free(lb_info);
+    }
+    hmap_destroy(&lb_map);
+}
 
 static void
 destroy_datapaths_and_ports(struct hmap *datapaths, struct hmap *ports,
@@ -12243,6 +12378,7 @@ ovnnb_db_run(struct northd_context *ctx,
     sync_port_groups(ctx, &port_groups);
     sync_meters(ctx);
     sync_dns_entries(ctx, datapaths);
+    sync_lb_entries(ctx, datapaths);
     destroy_ovn_lbs(&lbs);
     hmap_destroy(&lbs);
 
@@ -13004,6 +13140,8 @@ main(int argc, char *argv[])
     add_column_noalert(ovnsb_idl_loop.idl,
                        &sbrec_datapath_binding_col_tunnel_key);
     add_column_noalert(ovnsb_idl_loop.idl,
+                       &sbrec_datapath_binding_col_load_balancers);
+    add_column_noalert(ovnsb_idl_loop.idl,
                        &sbrec_datapath_binding_col_external_ids);
 
     ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_port_binding);
@@ -13169,6 +13307,14 @@ main(int argc, char *argv[])
                        &sbrec_service_monitor_col_src_ip);
     add_column_noalert(ovnsb_idl_loop.idl,
                        &sbrec_service_monitor_col_external_ids);
+
+    ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_load_balancer);
+    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_load_balancer_col_datapaths);
+    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_load_balancer_col_name);
+    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_load_balancer_col_vips);
+    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_load_balancer_col_protocol);
+    add_column_noalert(ovnsb_idl_loop.idl,
+                       &sbrec_load_balancer_col_external_ids);
 
     struct ovsdb_idl_index *sbrec_chassis_by_name
         = chassis_index_create(ovnsb_idl_loop.idl);
