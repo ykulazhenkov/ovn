@@ -35,6 +35,7 @@
 #include "lib/ovn-nb-idl.h"
 #include "lib/ovn-sb-idl.h"
 #include "lib/ovn-util.h"
+#include "lib/lb.h"
 #include "ovn/actions.h"
 #include "ovn/logical-fields.h"
 #include "packets.h"
@@ -3320,66 +3321,6 @@ cleanup_sb_ha_chassis_groups(struct northd_context *ctx,
     }
 }
 
-struct ovn_lb {
-    struct hmap_node hmap_node;
-
-    const struct nbrec_load_balancer *nlb; /* May be NULL. */
-    const struct sbrec_load_balancer *slb; /* May be NULL. */
-    char *selection_fields;
-    struct lb_vip *vips;
-    size_t n_vips;
-
-    size_t n_dps;
-    size_t n_allocated_dps;
-    const struct sbrec_datapath_binding **dps;
-};
-
-struct lb_vip {
-    char *vip;
-    uint16_t vip_port;
-    int addr_family;
-    char *backend_ips;
-
-    bool health_check;
-    struct lb_vip_backend *backends;
-    size_t n_backends;
-};
-
-struct lb_vip_backend {
-    char *ip;
-    uint16_t port;
-    int addr_family;
-
-    struct ovn_port *op; /* Logical port to which the ip belong to. */
-    bool health_check;
-    char *svc_mon_src_ip; /* Source IP to use for monitoring. */
-    const struct sbrec_service_monitor *sbrec_monitor;
-};
-
-
-static inline struct ovn_lb *
-ovn_lb_find(struct hmap *lbs, const struct uuid *uuid)
-{
-    struct ovn_lb *lb;
-    size_t hash = uuid_hash(uuid);
-    HMAP_FOR_EACH_WITH_HASH (lb, hmap_node, hash, lbs) {
-        if (uuid_equals(&lb->nlb->header_.uuid, uuid)) {
-            return lb;
-        }
-    }
-
-    return NULL;
-}
-
-static void
-ovn_lb_add_datapath(struct ovn_lb *lb, struct ovn_datapath *od)
-{
-    if (lb->n_allocated_dps == lb->n_dps) {
-        lb->dps = x2nrealloc(lb->dps, &lb->n_allocated_dps, sizeof *lb->dps);
-    }
-    lb->dps[lb->n_dps++] = od->sb;
-}
-
 struct service_monitor_info {
     struct hmap_node hmap_node;
     const struct sbrec_service_monitor *sbrec_mon;
@@ -3419,126 +3360,36 @@ create_or_get_service_mon(struct northd_context *ctx,
     return mon_info;
 }
 
-static struct ovn_lb *
-ovn_lb_create(struct northd_context *ctx, struct hmap *lbs,
-              const struct nbrec_load_balancer *nbrec_lb,
-              struct hmap *ports, struct hmap *monitor_map)
+static void
+ovn_lb_svc_create(struct northd_context *ctx, struct ovn_northd_lb *lb,
+                  struct hmap *monitor_map)
 {
-    struct ovn_lb *lb = xzalloc(sizeof *lb);
+    for (size_t i = 0; i < lb->n_vips; i++) {
+        struct ovn_northd_lb_vip *lb_vip = &lb->vips[i];
 
-    size_t hash = uuid_hash(&nbrec_lb->header_.uuid);
-    lb->nlb = nbrec_lb;
-    hmap_insert(lbs, &lb->hmap_node, hash);
-
-    lb->n_vips = smap_count(&nbrec_lb->vips);
-    lb->vips = xcalloc(lb->n_vips, sizeof (struct lb_vip));
-    struct smap_node *node;
-    size_t n_vips = 0;
-
-    SMAP_FOR_EACH (node, &nbrec_lb->vips) {
-        char *vip;
-        uint16_t port;
-        int addr_family;
-
-        if (!ip_address_and_port_from_lb_key(node->key, &vip, &port,
-                                             &addr_family)) {
+        if (!lb_vip->lb_health_check) {
             continue;
         }
 
-        lb->vips[n_vips].vip = vip;
-        lb->vips[n_vips].vip_port = port;
-        lb->vips[n_vips].addr_family = addr_family;
-        lb->vips[n_vips].backend_ips = xstrdup(node->value);
+        for (size_t j = 0; j < lb_vip->n_backends; j++) {
+            struct ovn_northd_lb_vip_backend *backend = &lb_vip->backends[j];
 
-        struct nbrec_load_balancer_health_check *lb_health_check = NULL;
-        if (nbrec_lb->protocol && !strcmp(nbrec_lb->protocol, "sctp")) {
-            if (nbrec_lb->n_health_check > 0) {
-                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
-                VLOG_WARN_RL(&rl,
-                             "SCTP load balancers do not currently support "
-                             "health checks. Not creating health checks for "
-                             "load balancer " UUID_FMT,
-                             UUID_ARGS(&nbrec_lb->header_.uuid));
-            }
-        } else {
-            for (size_t i = 0; i < nbrec_lb->n_health_check; i++) {
-                if (!strcmp(nbrec_lb->health_check[i]->vip, node->key)) {
-                    lb_health_check = nbrec_lb->health_check[i];
-                    break;
-                }
-            }
-        }
-
-        char *tokstr = xstrdup(node->value);
-        char *save_ptr = NULL;
-        char *token;
-        size_t n_backends = 0;
-        /* Format for a backend ips : IP1:port1,IP2:port2,...". */
-        for (token = strtok_r(tokstr, ",", &save_ptr);
-            token != NULL;
-            token = strtok_r(NULL, ",", &save_ptr)) {
-            n_backends++;
-        }
-
-        free(tokstr);
-        tokstr = xstrdup(node->value);
-        save_ptr = NULL;
-
-        lb->vips[n_vips].n_backends = n_backends;
-        lb->vips[n_vips].backends = xcalloc(n_backends,
-                                            sizeof (struct lb_vip_backend));
-        lb->vips[n_vips].health_check = lb_health_check ? true: false;
-
-        size_t i = 0;
-        for (token = strtok_r(tokstr, ",", &save_ptr);
-            token != NULL;
-            token = strtok_r(NULL, ",", &save_ptr)) {
-            char *backend_ip;
-            uint16_t backend_port;
-
-            if (!ip_address_and_port_from_lb_key(token, &backend_ip,
-                                                 &backend_port,
-                                                 &addr_family)) {
-                continue;
-            }
-
-            /* Get the logical port to which this ip belongs to. */
-            struct ovn_port *op = NULL;
-            char *svc_mon_src_ip = NULL;
-            const char *s = smap_get(&nbrec_lb->ip_port_mappings,
-                                     backend_ip);
-            if (s) {
-                char *port_name = xstrdup(s);
-                char *p = strstr(port_name, ":");
-                if (p) {
-                    *p = 0;
-                    p++;
-                    op = ovn_port_find(ports, port_name);
-                    svc_mon_src_ip = xstrdup(p);
-                }
-                free(port_name);
-            }
-
-            lb->vips[n_vips].backends[i].ip = backend_ip;
-            lb->vips[n_vips].backends[i].port = backend_port;
-            lb->vips[n_vips].backends[i].addr_family = addr_family;
-            lb->vips[n_vips].backends[i].op = op;
-            lb->vips[n_vips].backends[i].svc_mon_src_ip = svc_mon_src_ip;
-
-            if (lb_health_check && op && svc_mon_src_ip) {
-                const char *protocol = nbrec_lb->protocol;
+            if (backend->op && backend->svc_mon_src_ip) {
+                backend->health_check = true;
+                const char *protocol = lb->nlb->protocol;
                 if (!protocol || !protocol[0]) {
                     protocol = "tcp";
                 }
-                lb->vips[n_vips].backends[i].health_check = true;
+                backend->health_check = true;
                 struct service_monitor_info *mon_info =
-                    create_or_get_service_mon(ctx, monitor_map, backend_ip,
-                                              op->nbsp->name, backend_port,
+                    create_or_get_service_mon(ctx, monitor_map, backend->ip,
+                                              backend->op->nbsp->name,
+                                              backend->port,
                                               protocol);
 
                 ovs_assert(mon_info);
                 sbrec_service_monitor_set_options(
-                    mon_info->sbrec_mon, &lb_health_check->options);
+                    mon_info->sbrec_mon, &lb_vip->lb_health_check->options);
                 struct eth_addr ea;
                 if (!mon_info->sbrec_mon->src_mac ||
                     !eth_addr_from_string(mon_info->sbrec_mon->src_mac, &ea) ||
@@ -3548,78 +3399,29 @@ ovn_lb_create(struct northd_context *ctx, struct hmap *lbs,
                 }
 
                 if (!mon_info->sbrec_mon->src_ip ||
-                    strcmp(mon_info->sbrec_mon->src_ip, svc_mon_src_ip)) {
+                    strcmp(mon_info->sbrec_mon->src_ip,
+                           backend->svc_mon_src_ip)) {
                     sbrec_service_monitor_set_src_ip(mon_info->sbrec_mon,
-                                                     svc_mon_src_ip);
+                                                     backend->svc_mon_src_ip);
                 }
 
-                lb->vips[n_vips].backends[i].sbrec_monitor =
-                    mon_info->sbrec_mon;
+                lb_vip->backends[j].sbrec_monitor = mon_info->sbrec_mon;
                 mon_info->required = true;
-            } else {
-                lb->vips[n_vips].backends[i].health_check = false;
-            }
-
-            i++;
-        }
-
-        free(tokstr);
-        n_vips++;
-    }
-
-    char *proto = NULL;
-    if (nbrec_lb->protocol && nbrec_lb->protocol[0]) {
-        proto = nbrec_lb->protocol;
-    }
-
-    if (lb->nlb->n_selection_fields) {
-        struct ds sel_fields = DS_EMPTY_INITIALIZER;
-        for (size_t i = 0; i < lb->nlb->n_selection_fields; i++) {
-            char *field = lb->nlb->selection_fields[i];
-            if (!strcmp(field, "tp_src") && proto) {
-                ds_put_format(&sel_fields, "%s_src,", proto);
-            } else if (!strcmp(field, "tp_dst") && proto) {
-                ds_put_format(&sel_fields, "%s_dst,", proto);
-            } else {
-                ds_put_format(&sel_fields, "%s,", field);
             }
         }
-        ds_chomp(&sel_fields, ',');
-        lb->selection_fields = ds_steal_cstr(&sel_fields);
     }
-
-    return lb;
 }
 
-static void
-ovn_lb_destroy(struct ovn_lb *lb)
-{
-    for (size_t i = 0; i < lb->n_vips; i++) {
-        free(lb->vips[i].vip);
-        free(lb->vips[i].backend_ips);
-
-        for (size_t j = 0; j < lb->vips[i].n_backends; j++) {
-            free(lb->vips[i].backends[j].ip);
-            free(lb->vips[i].backends[j].svc_mon_src_ip);
-        }
-
-        free(lb->vips[i].backends);
-    }
-    free(lb->vips);
-    free(lb->selection_fields);
-    free(lb->dps);
-}
-
-static void build_lb_vip_ct_lb_actions(struct lb_vip *lb_vip,
+static void build_lb_vip_ct_lb_actions(struct ovn_northd_lb_vip *lb_vip,
                                        struct ds *action,
                                        char *selection_fields)
 {
-    if (lb_vip->health_check) {
+    if (lb_vip->lb_health_check) {
         ds_put_cstr(action, "ct_lb(backends=");
 
         size_t n_active_backends = 0;
         for (size_t k = 0; k < lb_vip->n_backends; k++) {
-            struct lb_vip_backend *backend = &lb_vip->backends[k];
+            struct ovn_northd_lb_vip_backend *backend = &lb_vip->backends[k];
             if (backend->health_check && backend->sbrec_monitor &&
                 backend->sbrec_monitor->status &&
                 strcmp(backend->sbrec_monitor->status, "online")) {
@@ -3669,7 +3471,12 @@ build_ovn_lbs(struct northd_context *ctx, struct hmap *datapaths,
 
     const struct nbrec_load_balancer *nbrec_lb;
     NBREC_LOAD_BALANCER_FOR_EACH (nbrec_lb, ctx->ovnnb_idl) {
-        ovn_lb_create(ctx, lbs, nbrec_lb, ports, &monitor_map);
+        ovn_northd_lb_create(nbrec_lb, ports, lbs, (void *)ovn_port_find);
+    }
+
+    struct ovn_northd_lb *lb;
+    HMAP_FOR_EACH (lb, hmap_node, lbs) {
+        ovn_lb_svc_create(ctx, lb, &monitor_map);
     }
 
     struct ovn_datapath *od;
@@ -3681,13 +3488,11 @@ build_ovn_lbs(struct northd_context *ctx, struct hmap *datapaths,
         for (size_t i = 0; i < od->nbs->n_load_balancer; i++) {
             const struct uuid *lb_uuid =
                 &od->nbs->load_balancer[i]->header_.uuid;
-            struct ovn_lb *lb = ovn_lb_find(lbs, lb_uuid);
+            lb = ovn_northd_lb_find(lbs, lb_uuid);
 
-            ovn_lb_add_datapath(lb, od);
+            ovn_northd_lb_add_datapath(lb, od->sb);
         }
     }
-
-    struct ovn_lb *lb;
 
     /* Delete any stale SB load balancer rows. */
     const struct sbrec_load_balancer *sbrec_lb, *next;
@@ -3699,7 +3504,7 @@ build_ovn_lbs(struct northd_context *ctx, struct hmap *datapaths,
             continue;
         }
 
-        lb = ovn_lb_find(lbs, &lb_uuid);
+        lb = ovn_northd_lb_find(lbs, &lb_uuid);
         if (lb && lb->n_dps) {
             lb->slb = sbrec_lb;
         } else {
@@ -3744,7 +3549,7 @@ build_ovn_lbs(struct northd_context *ctx, struct hmap *datapaths,
         for (size_t i = 0; i < od->nbs->n_load_balancer; i++) {
             const struct uuid *lb_uuid =
                 &od->nbs->load_balancer[i]->header_.uuid;
-            lb = ovn_lb_find(lbs, lb_uuid);
+            lb = ovn_northd_lb_find(lbs, lb_uuid);
             sbrec_lbs[i] = lb->slb;
         }
 
@@ -3763,16 +3568,6 @@ build_ovn_lbs(struct northd_context *ctx, struct hmap *datapaths,
         free(mon_info);
     }
     hmap_destroy(&monitor_map);
-}
-
-static void
-destroy_ovn_lbs(struct hmap *lbs)
-{
-    struct ovn_lb *lb;
-    HMAP_FOR_EACH_POP (lb, hmap_node, lbs) {
-        ovn_lb_destroy(lb);
-        free(lb);
-    }
 }
 
 static bool
@@ -5199,7 +4994,7 @@ ls_has_dns_records(const struct nbrec_logical_switch *nbs)
 
 static void
 build_empty_lb_event_flow(struct ovn_datapath *od, struct hmap *lflows,
-                          struct lb_vip *lb_vip,
+                          struct ovn_northd_lb_vip *lb_vip,
                           struct nbrec_load_balancer *lb,
                           int pl, struct shash *meter_groups)
 {
@@ -5291,12 +5086,12 @@ build_pre_lb(struct ovn_datapath *od, struct hmap *lflows,
     bool vip_configured = false;
     for (int i = 0; i < od->nbs->n_load_balancer; i++) {
         struct nbrec_load_balancer *nb_lb = od->nbs->load_balancer[i];
-        struct ovn_lb *lb =
-            ovn_lb_find(lbs, &nb_lb->header_.uuid);
+        struct ovn_northd_lb *lb =
+            ovn_northd_lb_find(lbs, &nb_lb->header_.uuid);
         ovs_assert(lb);
 
         for (size_t j = 0; j < lb->n_vips; j++) {
-            struct lb_vip *lb_vip = &lb->vips[j];
+            struct ovn_northd_lb_vip *lb_vip = &lb->vips[j];
             build_empty_lb_event_flow(od, lflows, lb_vip, nb_lb,
                                       S_SWITCH_IN_PRE_LB, meter_groups);
 
@@ -6027,7 +5822,8 @@ build_lb(struct ovn_datapath *od, struct hmap *lflows)
 
 static void
 build_lb_hairpin_rules(struct ovn_datapath *od, struct hmap *lflows,
-                       struct ovn_lb *lb, struct lb_vip *lb_vip,
+                       struct ovn_northd_lb *lb,
+                       struct ovn_northd_lb_vip *lb_vip,
                        const char *ip_match, const char *proto)
 {
     if (lb_vip->n_backends == 0) {
@@ -6049,7 +5845,7 @@ build_lb_hairpin_rules(struct ovn_datapath *od, struct hmap *lflows,
      */
     ds_put_char(&match_reply, '(');
     for (size_t i = 0; i < lb_vip->n_backends; i++) {
-        struct lb_vip_backend *backend = &lb_vip->backends[i];
+        struct ovn_northd_lb_vip_backend *backend = &lb_vip->backends[i];
 
         /* Packets that after load balancing have equal source and
          * destination IPs should be hairpinned.
@@ -6104,10 +5900,11 @@ build_lb_hairpin_rules(struct ovn_datapath *od, struct hmap *lflows,
 }
 
 static void
-build_lb_rules(struct ovn_datapath *od, struct hmap *lflows, struct ovn_lb *lb)
+build_lb_rules(struct ovn_datapath *od, struct hmap *lflows,
+               struct ovn_northd_lb *lb)
 {
     for (size_t i = 0; i < lb->n_vips; i++) {
-        struct lb_vip *lb_vip = &lb->vips[i];
+        struct ovn_northd_lb_vip *lb_vip = &lb->vips[i];
 
         const char *ip_match = NULL;
         if (lb_vip->addr_family == AF_INET) {
@@ -6193,8 +5990,8 @@ build_stateful(struct ovn_datapath *od, struct hmap *lflows, struct hmap *lbs)
      * connection, so it is okay if we do not hit the above match on
      * REGBIT_CONNTRACK_COMMIT. */
     for (int i = 0; i < od->nbs->n_load_balancer; i++) {
-        struct ovn_lb *lb =
-            ovn_lb_find(lbs, &od->nbs->load_balancer[i]->header_.uuid);
+        struct ovn_northd_lb *lb =
+            ovn_northd_lb_find(lbs, &od->nbs->load_balancer[i]->header_.uuid);
 
         ovs_assert(lb);
         build_lb_rules(od, lflows, lb);
@@ -7129,10 +6926,10 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
 
     /* Ingress table 13: ARP/ND responder for service monitor source ip.
      * (priority 110)*/
-    struct ovn_lb *lb;
+    struct ovn_northd_lb *lb;
     HMAP_FOR_EACH (lb, hmap_node, lbs) {
         for (size_t i = 0; i < lb->n_vips; i++) {
-            if (!lb->vips[i].health_check) {
+            if (!lb->vips[i].lb_health_check) {
                 continue;
             }
 
@@ -8337,7 +8134,7 @@ get_force_snat_ip(struct ovn_datapath *od, const char *key_type,
 static void
 add_router_lb_flow(struct hmap *lflows, struct ovn_datapath *od,
                    struct ds *match, struct ds *actions, int priority,
-                   bool lb_force_snat_ip, struct lb_vip *lb_vip,
+                   bool lb_force_snat_ip, struct ovn_northd_lb_vip *lb_vip,
                    const char *proto, struct nbrec_load_balancer *lb,
                    struct shash *meter_groups, struct sset *nat_entries)
 {
@@ -8417,7 +8214,7 @@ add_router_lb_flow(struct hmap *lflows, struct ovn_datapath *od,
     ds_put_format(&undnat_match, "%s && (", ip_match);
 
     for (size_t i = 0; i < lb_vip->n_backends; i++) {
-        struct lb_vip_backend *backend = &lb_vip->backends[i];
+        struct ovn_northd_lb_vip_backend *backend = &lb_vip->backends[i];
         ds_put_format(&undnat_match, "(%s.src == %s", ip_match, backend->ip);
 
         if (backend->port) {
@@ -9936,12 +9733,12 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
 
         for (int i = 0; i < od->nbr->n_load_balancer; i++) {
             struct nbrec_load_balancer *nb_lb = od->nbr->load_balancer[i];
-            struct ovn_lb *lb =
-                ovn_lb_find(lbs, &nb_lb->header_.uuid);
+            struct ovn_northd_lb *lb =
+                ovn_northd_lb_find(lbs, &nb_lb->header_.uuid);
             ovs_assert(lb);
 
             for (size_t j = 0; j < lb->n_vips; j++) {
-                struct lb_vip *lb_vip = &lb->vips[j];
+                struct ovn_northd_lb_vip *lb_vip = &lb->vips[j];
                 ds_clear(&actions);
                 build_lb_vip_ct_lb_actions(lb_vip, &actions,
                                            lb->selection_fields);
@@ -12347,8 +12144,7 @@ ovnnb_db_run(struct northd_context *ctx,
     sync_port_groups(ctx, &port_groups);
     sync_meters(ctx);
     sync_dns_entries(ctx, datapaths);
-    destroy_ovn_lbs(&lbs);
-    hmap_destroy(&lbs);
+    ovn_northd_lbs_destroy(&lbs);
 
     struct ovn_igmp_group *igmp_group, *next_igmp_group;
 
