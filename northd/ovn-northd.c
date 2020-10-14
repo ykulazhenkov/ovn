@@ -6816,198 +6816,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
     struct ds match = DS_EMPTY_INITIALIZER;
     struct ds actions = DS_EMPTY_INITIALIZER;
     struct ovn_datapath *od;
-
-    /* Ingress table 13: ARP/ND responder, skip requests coming from localnet
-     * and vtep ports. (priority 100); see ovn-northd.8.xml for the
-     * rationale. */
     struct ovn_port *op;
-    HMAP_FOR_EACH (op, key_node, ports) {
-        if (!op->nbsp) {
-            continue;
-        }
-
-        if ((!strcmp(op->nbsp->type, "localnet")) ||
-            (!strcmp(op->nbsp->type, "vtep"))) {
-            ds_clear(&match);
-            ds_put_format(&match, "inport == %s", op->json_key);
-            ovn_lflow_add_with_hint(lflows, op->od, S_SWITCH_IN_ARP_ND_RSP,
-                                    100, ds_cstr(&match), "next;",
-                                    &op->nbsp->header_);
-        }
-    }
-
-    /* Ingress table 13: ARP/ND responder, reply for known IPs.
-     * (priority 50). */
-    HMAP_FOR_EACH (op, key_node, ports) {
-        if (!op->nbsp) {
-            continue;
-        }
-
-        if (!strcmp(op->nbsp->type, "virtual")) {
-            /* Handle
-             *  - GARPs for virtual ip which belongs to a logical port
-             *    of type 'virtual' and bind that port.
-             *
-             *  - ARP reply from the virtual ip which belongs to a logical
-             *    port of type 'virtual' and bind that port.
-             * */
-            ovs_be32 ip;
-            const char *virtual_ip = smap_get(&op->nbsp->options,
-                                              "virtual-ip");
-            const char *virtual_parents = smap_get(&op->nbsp->options,
-                                                   "virtual-parents");
-            if (!virtual_ip || !virtual_parents ||
-                !ip_parse(virtual_ip, &ip)) {
-                continue;
-            }
-
-            char *tokstr = xstrdup(virtual_parents);
-            char *save_ptr = NULL;
-            char *vparent;
-            for (vparent = strtok_r(tokstr, ",", &save_ptr); vparent != NULL;
-                 vparent = strtok_r(NULL, ",", &save_ptr)) {
-                struct ovn_port *vp = ovn_port_find(ports, vparent);
-                if (!vp || vp->od != op->od) {
-                    /* vparent name should be valid and it should belong
-                     * to the same logical switch. */
-                    continue;
-                }
-
-                ds_clear(&match);
-                ds_put_format(&match, "inport == \"%s\" && "
-                              "((arp.op == 1 && arp.spa == %s && "
-                              "arp.tpa == %s) || (arp.op == 2 && "
-                              "arp.spa == %s))",
-                              vparent, virtual_ip, virtual_ip,
-                              virtual_ip);
-                ds_clear(&actions);
-                ds_put_format(&actions,
-                    "bind_vport(%s, inport); "
-                    "next;",
-                    op->json_key);
-                ovn_lflow_add_with_hint(lflows, op->od,
-                                        S_SWITCH_IN_ARP_ND_RSP, 100,
-                                        ds_cstr(&match), ds_cstr(&actions),
-                                        &vp->nbsp->header_);
-            }
-
-            free(tokstr);
-        } else {
-            /*
-             * Add ARP/ND reply flows if either the
-             *  - port is up and it doesn't have 'unknown' address defined or
-             *  - port type is router or
-             *  - port type is localport
-             */
-            if (check_lsp_is_up &&
-                !lsp_is_up(op->nbsp) && strcmp(op->nbsp->type, "router") &&
-                strcmp(op->nbsp->type, "localport")) {
-                continue;
-            }
-
-            if (lsp_is_external(op->nbsp) || op->has_unknown) {
-                continue;
-            }
-
-            for (size_t i = 0; i < op->n_lsp_addrs; i++) {
-                for (size_t j = 0; j < op->lsp_addrs[i].n_ipv4_addrs; j++) {
-                    ds_clear(&match);
-                    ds_put_format(&match, "arp.tpa == %s && arp.op == 1",
-                                op->lsp_addrs[i].ipv4_addrs[j].addr_s);
-                    ds_clear(&actions);
-                    ds_put_format(&actions,
-                        "eth.dst = eth.src; "
-                        "eth.src = %s; "
-                        "arp.op = 2; /* ARP reply */ "
-                        "arp.tha = arp.sha; "
-                        "arp.sha = %s; "
-                        "arp.tpa = arp.spa; "
-                        "arp.spa = %s; "
-                        "outport = inport; "
-                        "flags.loopback = 1; "
-                        "output;",
-                        op->lsp_addrs[i].ea_s, op->lsp_addrs[i].ea_s,
-                        op->lsp_addrs[i].ipv4_addrs[j].addr_s);
-                    ovn_lflow_add_with_hint(lflows, op->od,
-                                            S_SWITCH_IN_ARP_ND_RSP, 50,
-                                            ds_cstr(&match),
-                                            ds_cstr(&actions),
-                                            &op->nbsp->header_);
-
-                    /* Do not reply to an ARP request from the port that owns
-                     * the address (otherwise a DHCP client that ARPs to check
-                     * for a duplicate address will fail).  Instead, forward
-                     * it the usual way.
-                     *
-                     * (Another alternative would be to simply drop the packet.
-                     * If everything is working as it is configured, then this
-                     * would produce equivalent results, since no one should
-                     * reply to the request.  But ARPing for one's own IP
-                     * address is intended to detect situations where the
-                     * network is not working as configured, so dropping the
-                     * request would frustrate that intent.) */
-                    ds_put_format(&match, " && inport == %s", op->json_key);
-                    ovn_lflow_add_with_hint(lflows, op->od,
-                                            S_SWITCH_IN_ARP_ND_RSP, 100,
-                                            ds_cstr(&match), "next;",
-                                            &op->nbsp->header_);
-                }
-
-                /* For ND solicitations, we need to listen for both the
-                 * unicast IPv6 address and its all-nodes multicast address,
-                 * but always respond with the unicast IPv6 address. */
-                for (size_t j = 0; j < op->lsp_addrs[i].n_ipv6_addrs; j++) {
-                    ds_clear(&match);
-                    ds_put_format(&match,
-                            "nd_ns && ip6.dst == {%s, %s} && nd.target == %s",
-                            op->lsp_addrs[i].ipv6_addrs[j].addr_s,
-                            op->lsp_addrs[i].ipv6_addrs[j].sn_addr_s,
-                            op->lsp_addrs[i].ipv6_addrs[j].addr_s);
-
-                    ds_clear(&actions);
-                    ds_put_format(&actions,
-                            "%s { "
-                            "eth.src = %s; "
-                            "ip6.src = %s; "
-                            "nd.target = %s; "
-                            "nd.tll = %s; "
-                            "outport = inport; "
-                            "flags.loopback = 1; "
-                            "output; "
-                            "};",
-                            !strcmp(op->nbsp->type, "router") ?
-                                "nd_na_router" : "nd_na",
-                            op->lsp_addrs[i].ea_s,
-                            op->lsp_addrs[i].ipv6_addrs[j].addr_s,
-                            op->lsp_addrs[i].ipv6_addrs[j].addr_s,
-                            op->lsp_addrs[i].ea_s);
-                    ovn_lflow_add_with_hint(lflows, op->od,
-                                            S_SWITCH_IN_ARP_ND_RSP, 50,
-                                            ds_cstr(&match),
-                                            ds_cstr(&actions),
-                                            &op->nbsp->header_);
-
-                    /* Do not reply to a solicitation from the port that owns
-                     * the address (otherwise DAD detection will fail). */
-                    ds_put_format(&match, " && inport == %s", op->json_key);
-                    ovn_lflow_add_with_hint(lflows, op->od,
-                                            S_SWITCH_IN_ARP_ND_RSP, 100,
-                                            ds_cstr(&match), "next;",
-                                            &op->nbsp->header_);
-                }
-            }
-        }
-    }
-
-    /* Ingress table 13: ARP/ND responder, by default goto next.
-     * (priority 0)*/
-    HMAP_FOR_EACH (od, key_node, datapaths) {
-        if (!od->nbs) {
-            continue;
-        }
-
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_ARP_ND_RSP, 0, "1", "next;");
-    }
 
     /* Ingress table 13: ARP/ND responder for service monitor source ip.
      * (priority 110)*/
@@ -7500,6 +7309,205 @@ static void
 
         /* Port security flows have priority 50 (see below) and will continue
          * to the next table if packet source is acceptable. */
+    }
+}
+
+/* Ingress table 13: ARP/ND responder, skip requests coming from localnet
+ * and vtep ports. (priority 100); see ovn-northd.8.xml for the
+ * rationale. */
+
+static void
+    build_lswitch_arp_nd_responder(
+            struct ovn_port *op, struct hmap *lflows,
+            struct ds *match)
+{
+    if (op->nbsp) {
+        if ((!strcmp(op->nbsp->type, "localnet")) ||
+            (!strcmp(op->nbsp->type, "vtep"))) {
+            ds_clear(match);
+            ds_put_format(match, "inport == %s", op->json_key);
+            ovn_lflow_add_with_hint(lflows, op->od, S_SWITCH_IN_ARP_ND_RSP,
+                                    100, ds_cstr(match), "next;",
+                                    &op->nbsp->header_);
+        }
+    }
+}
+
+/* Ingress table 13: ARP/ND responder, reply for known IPs.
+ * (priority 50). */
+static void
+    build_lswitch_arp_nd_responder_known(
+            struct ovn_port *op, struct hmap *lflows,
+            struct hmap *ports,
+            struct ds *match, struct ds *actions)
+{
+    if (!op->nbsp) {
+        return;
+    }
+    if (!strcmp(op->nbsp->type, "virtual")) {
+        /* Handle
+         *  - GARPs for virtual ip which belongs to a logical port
+         *    of type 'virtual' and bind that port.
+         *
+         *  - ARP reply from the virtual ip which belongs to a logical
+         *    port of type 'virtual' and bind that port.
+         * */
+        ovs_be32 ip;
+        const char *virtual_ip = smap_get(&op->nbsp->options,
+                                          "virtual-ip");
+        const char *virtual_parents = smap_get(&op->nbsp->options,
+                                               "virtual-parents");
+        if (!virtual_ip || !virtual_parents ||
+            !ip_parse(virtual_ip, &ip)) {
+            return;
+        }
+
+        char *tokstr = xstrdup(virtual_parents);
+        char *save_ptr = NULL;
+        char *vparent;
+        for (vparent = strtok_r(tokstr, ",", &save_ptr); vparent != NULL;
+             vparent = strtok_r(NULL, ",", &save_ptr)) {
+            struct ovn_port *vp = ovn_port_find(ports, vparent);
+            if (!vp || vp->od != op->od) {
+                /* vparent name should be valid and it should belong
+                 * to the same logical switch. */
+                continue;
+            }
+
+            ds_clear(match);
+            ds_put_format(match, "inport == \"%s\" && "
+                          "((arp.op == 1 && arp.spa == %s && "
+                          "arp.tpa == %s) || (arp.op == 2 && "
+                          "arp.spa == %s))",
+                          vparent, virtual_ip, virtual_ip,
+                          virtual_ip);
+            ds_clear(actions);
+            ds_put_format(actions,
+                "bind_vport(%s, inport); "
+                "next;",
+                op->json_key);
+            ovn_lflow_add_with_hint(lflows, op->od,
+                                    S_SWITCH_IN_ARP_ND_RSP, 100,
+                                    ds_cstr(match), ds_cstr(actions),
+                                    &vp->nbsp->header_);
+        }
+
+        free(tokstr);
+    } else {
+        /*
+         * Add ARP/ND reply flows if either the
+         *  - port is up and it doesn't have 'unknown' address defined or
+         *  - port type is router or
+         *  - port type is localport
+         */
+        if (check_lsp_is_up &&
+            !lsp_is_up(op->nbsp) && strcmp(op->nbsp->type, "router") &&
+            strcmp(op->nbsp->type, "localport")) {
+            return;
+        }
+
+        if (lsp_is_external(op->nbsp) || op->has_unknown) {
+            return;
+        }
+
+        for (size_t i = 0; i < op->n_lsp_addrs; i++) {
+            for (size_t j = 0; j < op->lsp_addrs[i].n_ipv4_addrs; j++) {
+                ds_clear(match);
+                ds_put_format(match, "arp.tpa == %s && arp.op == 1",
+                            op->lsp_addrs[i].ipv4_addrs[j].addr_s);
+                ds_clear(actions);
+                ds_put_format(actions,
+                    "eth.dst = eth.src; "
+                    "eth.src = %s; "
+                    "arp.op = 2; /* ARP reply */ "
+                    "arp.tha = arp.sha; "
+                    "arp.sha = %s; "
+                    "arp.tpa = arp.spa; "
+                    "arp.spa = %s; "
+                    "outport = inport; "
+                    "flags.loopback = 1; "
+                    "output;",
+                    op->lsp_addrs[i].ea_s, op->lsp_addrs[i].ea_s,
+                    op->lsp_addrs[i].ipv4_addrs[j].addr_s);
+                ovn_lflow_add_with_hint(lflows, op->od,
+                                        S_SWITCH_IN_ARP_ND_RSP, 50,
+                                        ds_cstr(match),
+                                        ds_cstr(actions),
+                                        &op->nbsp->header_);
+
+                /* Do not reply to an ARP request from the port that owns
+                 * the address (otherwise a DHCP client that ARPs to check
+                 * for a duplicate address will fail).  Instead, forward
+                 * it the usual way.
+                 *
+                 * (Another alternative would be to simply drop the packet.
+                 * If everything is working as it is configured, then this
+                 * would produce equivalent results, since no one should
+                 * reply to the request.  But ARPing for one's own IP
+                 * address is intended to detect situations where the
+                 * network is not working as configured, so dropping the
+                 * request would frustrate that intent.) */
+                ds_put_format(match, " && inport == %s", op->json_key);
+                ovn_lflow_add_with_hint(lflows, op->od,
+                                        S_SWITCH_IN_ARP_ND_RSP, 100,
+                                        ds_cstr(match), "next;",
+                                        &op->nbsp->header_);
+            }
+
+            /* For ND solicitations, we need to listen for both the
+             * unicast IPv6 address and its all-nodes multicast address,
+             * but always respond with the unicast IPv6 address. */
+            for (size_t j = 0; j < op->lsp_addrs[i].n_ipv6_addrs; j++) {
+                ds_clear(match);
+                ds_put_format(match,
+                        "nd_ns && ip6.dst == {%s, %s} && nd.target == %s",
+                        op->lsp_addrs[i].ipv6_addrs[j].addr_s,
+                        op->lsp_addrs[i].ipv6_addrs[j].sn_addr_s,
+                        op->lsp_addrs[i].ipv6_addrs[j].addr_s);
+
+                ds_clear(actions);
+                ds_put_format(actions,
+                        "%s { "
+                        "eth.src = %s; "
+                        "ip6.src = %s; "
+                        "nd.target = %s; "
+                        "nd.tll = %s; "
+                        "outport = inport; "
+                        "flags.loopback = 1; "
+                        "output; "
+                        "};",
+                        !strcmp(op->nbsp->type, "router") ?
+                            "nd_na_router" : "nd_na",
+                        op->lsp_addrs[i].ea_s,
+                        op->lsp_addrs[i].ipv6_addrs[j].addr_s,
+                        op->lsp_addrs[i].ipv6_addrs[j].addr_s,
+                        op->lsp_addrs[i].ea_s);
+                ovn_lflow_add_with_hint(lflows, op->od,
+                                        S_SWITCH_IN_ARP_ND_RSP, 50,
+                                        ds_cstr(match),
+                                        ds_cstr(actions),
+                                        &op->nbsp->header_);
+
+                /* Do not reply to a solicitation from the port that owns
+                 * the address (otherwise DAD detection will fail). */
+                ds_put_format(match, " && inport == %s", op->json_key);
+                ovn_lflow_add_with_hint(lflows, op->od,
+                                        S_SWITCH_IN_ARP_ND_RSP, 100,
+                                        ds_cstr(match), "next;",
+                                        &op->nbsp->header_);
+            }
+        }
+    }
+}
+
+/* Ingress table 13: ARP/ND responder, by default goto next.
+ * (priority 0)*/
+static void
+    build_lswitch_arp_nd_responder_next(
+            struct ovn_datapath *od, struct hmap *lflows)
+{
+    if (od->nbs) {
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_ARP_ND_RSP, 0, "1", "next;");
     }
 }
 
@@ -11353,6 +11361,7 @@ build_lswitch_and_lrouter_iterate_by_od(
     build_fwd_group_lflows(od, lsi->lflows);
     build_lswitch_lflows_admission_control(od, lsi->lflows);
     build_lswitch_input_port_sec_od(od, lsi->lflows);
+    build_lswitch_arp_nd_responder_next(od, lsi->lflows);
 
     /* Build Logical Router Flows. */
     build_adm_ctrl_flows_for_lrouter(od, lsi->lflows);
@@ -11385,6 +11394,11 @@ build_lswitch_and_lrouter_iterate_by_op(
     /* Build Logical Switch Flows. */
     build_lswitch_input_port_sec_op(op, lsi->lflows, &lsi->actions,
                                     &lsi->match);
+    build_lswitch_input_port_sec_op(op, lsi->lflows, &lsi->actions,
+                                    &lsi->match);
+    build_lswitch_arp_nd_responder(op, lsi->lflows, &lsi->match);
+    build_lswitch_arp_nd_responder_known(op, lsi->lflows, lsi->ports,
+                                         &lsi->match, &lsi->actions);
 
     /* Build Logical Router Flows. */
     build_adm_ctrl_flows_for_lrouter_port(op, lsi->lflows, &lsi->match,
