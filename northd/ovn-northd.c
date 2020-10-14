@@ -59,6 +59,8 @@ static unixctl_cb_func ovn_northd_resume;
 static unixctl_cb_func ovn_northd_is_paused;
 static unixctl_cb_func ovn_northd_status;
 static unixctl_cb_func cluster_state_reset_cmd;
+static unixctl_cb_func get_param_cutoff;
+static unixctl_cb_func set_param_cutoff;
 
 struct northd_context {
     struct ovsdb_idl *ovnnb_idl;
@@ -11471,8 +11473,8 @@ static void init_lflows_thread_pool(void)
  * Setting to 1 forces "all parallel" lflow build.
  */
 
-#define OD_CUTOFF 1
-#define OP_CUTOFF 1
+static ssize_t lflow_od_cuttoff = 1;
+static ssize_t lflow_op_cutoff = 1;
 
 static void
 build_lswitch_and_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
@@ -11483,7 +11485,8 @@ build_lswitch_and_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
 {
     char *svc_check_match = xasprintf("eth.dst == %s", svc_monitor_mac);
 
-    if (hmap_count(datapaths) > OD_CUTOFF || hmap_count(ports) > OP_CUTOFF) {
+    if (hmap_count(datapaths) > lflow_od_cuttoff ||
+            hmap_count(ports) > lflow_op_cutoff) {
 
         struct hmap *lflow_segs;
         struct lswitch_flow_build_info *lsiv;
@@ -13163,6 +13166,14 @@ main(int argc, char *argv[])
     unixctl_command_register("is-paused", "", 0, 0, ovn_northd_is_paused,
                              &state);
     unixctl_command_register("status", "", 0, 0, ovn_northd_status, &state);
+    unixctl_command_register("set-datapath-cutoff", "", 0, 0,
+                             set_param_cutoff, &lflow_od_cuttoff);
+    unixctl_command_register("set-port-cutoff", "", 0, 0,
+                             set_param_cutoff, &lflow_op_cutoff);
+    unixctl_command_register("get-datapath-cutoff", "", 0, 0,
+                             get_param_cutoff, &lflow_od_cuttoff);
+    unixctl_command_register("get-port-cutoff", "", 0, 0,
+                             get_param_cutoff, &lflow_op_cutoff);
 
     bool reset_ovnsb_idl_min_index = false;
     unixctl_command_register("sb-cluster-state-reset", "", 0, 0,
@@ -13587,4 +13598,34 @@ cluster_state_reset_cmd(struct unixctl_conn *conn, int argc OVS_UNUSED,
     *idl_reset = true;
     poll_immediate_wake();
     unixctl_command_reply(conn, NULL);
+}
+
+static void set_param_cutoff
+(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                          const char *argv[],
+                          void *param_)
+{
+    long new_cutoff;
+    ssize_t *param = param_;
+
+    if (str_to_long(argv[1], 10, &new_cutoff)) {
+        if (new_cutoff > 0) {
+            *param = new_cutoff;
+            return;
+        }
+    }
+    unixctl_command_reply_error(conn, "unsigned integer required");
+}
+
+static void get_param_cutoff
+(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                          const char *argv[] OVS_UNUSED,
+                          void *param_)
+{
+    struct ds ds = DS_EMPTY_INITIALIZER;
+    ssize_t *param = param_;
+
+    ds_put_format(&ds, "%ld\n", *param);
+    unixctl_command_reply(conn, ds_cstr(&ds));
+    ds_destroy(&ds);
 }
