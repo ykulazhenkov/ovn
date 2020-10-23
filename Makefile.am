@@ -105,7 +105,8 @@ EXTRA_DIST = \
 	ovn-ic-nb.ovsschema \
 	ovn-ic-nb.xml \
 	ovn-ic-sb.ovsschema \
-	ovn-ic-sb.xml
+	ovn-ic-sb.xml \
+	.github/workflows/test.yml
 bin_PROGRAMS =
 sbin_PROGRAMS =
 bin_SCRIPTS =
