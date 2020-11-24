@@ -28,12 +28,14 @@ OPTS="$EXTRA_OPTS $*"
 
 if [ "$CC" = "clang" ]; then
     export OVS_CFLAGS="$CFLAGS -Wno-error=unused-command-line-argument"
-elif [[ $BUILD_ENV =~ "-m32" ]]; then
-    # Disable sparse for 32bit builds on 64bit machine
-    export OVS_CFLAGS="$CFLAGS $BUILD_ENV"
+elif [ "$M32" ]; then
+    # Not using sparse for 32bit builds on 64bit machine.
+    # Adding m32 flag directly to CC to avoid any posiible issues with API/ABI
+    # difference on 'configure' and 'make' stages.
+    export CC="$CC -m32"
 else
     OPTS="$OPTS --enable-sparse"
-    export OVS_CFLAGS="$CFLAGS $BUILD_ENV $SPARSE_FLAGS"
+    export OVS_CFLAGS="$CFLAGS $SPARSE_FLAGS"
 fi
 
 if [ "$TESTSUITE" ]; then
