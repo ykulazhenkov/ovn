@@ -1,0 +1,80 @@
+name: Build and Test
+
+on: [push, pull_request]
+
+jobs:
+  build-linux:
+    env:
+      dependencies: |
+        automake libtool gcc bc libjemalloc1 libjemalloc-dev    \
+        libssl-dev llvm-dev libelf-dev libnuma-dev libpcap-dev  \
+        python3-openssl python3-pip python3-sphinx              \
+        selinux-policy-dev
+      CC:          ${{ matrix.compiler }}
+      LIBS:        ${{ matrix.libs }}
+      M32:         ${{ matrix.m32 }}
+      OPTS:        ${{ matrix.opts }}
+      TESTSUITE:   ${{ matrix.testsuite }}
+
+    name: linux ${{ join(matrix.*, ' ') }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compiler:     gcc
+            opts:         --disable-ssl
+          - compiler:     clang
+            opts:         --disable-ssl
+
+          - compiler:     gcc
+            testsuite:    test
+          - compiler:     clang
+            testsuite:    test
+
+          - compiler:     gcc
+            testsuite:    test
+            libs:         -ljemalloc
+          - compiler:     clang
+            testsuite:    test
+            libs:         -ljemalloc
+
+          - compiler:     gcc
+            m32:          m32
+            opts:         --disable-ssl
+
+    steps:
+    - name: checkout
+      uses: actions/checkout@v2
+
+    - name: install common dependencies
+      if:   matrix.dependencies == ''
+      run:  sudo apt install -y ${{ env.dependencies }}
+
+    - name: prepare
+      run:  ./.ci/linux-prepare.sh
+
+    - name: build
+      run:  PATH="$PATH:$HOME/bin" ./.ci/linux-build.sh
+
+  build-osx:
+    env:
+      CC:    clang
+      OPTS:  --disable-ssl
+
+    name:    osx clang --disable-ssl
+    runs-on: macos-latest
+
+    strategy:
+      fail-fast: false
+
+    steps:
+    - name: checkout
+      uses: actions/checkout@v2
+    - name: install dependencies
+      run:  brew install automake libtool
+    - name: prepare
+      run:  ./.ci/osx-prepare.sh
+    - name: build
+      run:  PATH="$PATH:$HOME/bin" ./.ci/osx-build.sh
