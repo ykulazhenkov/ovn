@@ -38,6 +38,7 @@
 #include "lflow.h"
 #include "lib/vswitch-idl.h"
 #include "lport.h"
+#include "mac-binding.h"
 #include "ofctrl.h"
 #include "openvswitch/vconn.h"
 #include "openvswitch/vlog.h"
@@ -1675,6 +1676,41 @@ physical_flow_changes_ovs_iface_handler(struct engine_node *node, void *data)
     return true;
 }
 
+struct ed_type_mac_binding_data {
+    struct mac_binding *mb;
+};
+
+static void *
+en_mac_binding_init(struct engine_node *node OVS_UNUSED,
+                    struct engine_arg *arg OVS_UNUSED)
+{
+    struct ed_type_mac_binding_data *data = xzalloc(sizeof *data);
+    data->mb = mac_binding_create(86400);
+
+    return data;
+}
+
+static void
+en_mac_binding_cleanup(void *data)
+{
+    struct ed_type_mac_binding_data *mb_data = data;
+    mac_binding_unref(mb_data->mb);
+}
+
+static void
+en_mac_binding_run(struct engine_node *node OVS_UNUSED,
+                   void *data OVS_UNUSED)
+{
+    enum engine_node_state state = EN_UNCHANGED;
+
+    struct ed_type_mac_binding_data *mb_data = data;
+    if (mac_binding_run(mb_data->mb)) {
+        state = EN_UPDATED;
+    }
+
+    engine_set_node_state(node, state);
+}
+
 struct flow_output_persistent_data {
     uint32_t conj_id_ofs;
     struct hmap lflow_cache_map;
@@ -1961,6 +1997,11 @@ en_flow_output_run(struct engine_node *node, void *data)
             VLOG_WARN("Conjunction id overflow.");
         }
     }
+
+    struct ed_type_mac_binding_data *mb_data =
+        engine_get_input_data("mac_binding", node);
+    mac_binding_compute_lflows(mb_data->mb, &rt_data->local_datapaths,
+                               true, flow_table);
 
     struct physical_ctx p_ctx;
     init_physical_ctx(node, rt_data, &p_ctx);
@@ -2277,6 +2318,22 @@ flow_output_sb_load_balancer_handler(struct engine_node *node, void *data)
     return handled;
 }
 
+static bool
+flow_output_mac_binding_handler(struct engine_node *node, void *data)
+{
+    struct ed_type_runtime_data *rt_data =
+        engine_get_input_data("runtime_data", node);
+    struct ed_type_flow_output *fo = data;
+
+    struct ed_type_mac_binding_data *mb_data =
+        engine_get_input_data("mac_binding", node);
+    mac_binding_compute_lflows(mb_data->mb, &rt_data->local_datapaths,
+                               false, &fo->flow_table);
+
+    engine_set_node_state(node, EN_UPDATED);
+    return true;
+}
+
 struct ovn_controller_exit_args {
     bool *exiting;
     bool *restart;
@@ -2354,7 +2411,6 @@ main(int argc, char *argv[])
     daemonize_complete();
 
     patch_init();
-    pinctrl_init();
     lflow_init();
 
     /* Connect to OVS OVSDB instance. */
@@ -2393,10 +2449,6 @@ main(int argc, char *argv[])
     struct ovsdb_idl_index *sbrec_datapath_binding_by_key
         = ovsdb_idl_index_create1(ovnsb_idl_loop.idl,
                                   &sbrec_datapath_binding_col_tunnel_key);
-    struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip
-        = ovsdb_idl_index_create2(ovnsb_idl_loop.idl,
-                                  &sbrec_mac_binding_col_logical_port,
-                                  &sbrec_mac_binding_col_ip);
     struct ovsdb_idl_index *sbrec_ip_multicast
         = ip_mcast_index_create(ovnsb_idl_loop.idl);
     struct ovsdb_idl_index *sbrec_igmp_group
@@ -2461,6 +2513,7 @@ main(int argc, char *argv[])
     ENGINE_NODE(flow_output, "flow_output");
     ENGINE_NODE(addr_sets, "addr_sets");
     ENGINE_NODE(port_groups, "port_groups");
+    ENGINE_NODE(mac_binding, "mac_binding");
 
 #define SB_NODE(NAME, NAME_STR) ENGINE_NODE_SB(NAME, NAME_STR);
     SB_NODES
@@ -2495,6 +2548,8 @@ main(int argc, char *argv[])
     engine_add_input(&en_flow_output, &en_mff_ovn_geneve, NULL);
     engine_add_input(&en_flow_output, &en_physical_flow_changes,
                      flow_output_physical_flow_changes_handler);
+    engine_add_input(&en_flow_output, &en_mac_binding,
+                     flow_output_mac_binding_handler);
 
     /* We need this input nodes for only data. Hence the noop handler. */
     engine_add_input(&en_flow_output, &en_ct_zones, engine_noop_handler);
@@ -2574,6 +2629,10 @@ main(int argc, char *argv[])
     ofctrl_init(&flow_output_data->group_table,
                 &flow_output_data->meter_table,
                 get_ofctrl_probe_interval(ovs_idl_loop.idl));
+
+    struct ed_type_mac_binding_data *mb_data;
+    mb_data = engine_get_internal_data(&en_mac_binding);
+    pinctrl_init(mb_data->mb);
 
     unixctl_command_register("group-table-list", "", 0, 0,
                              extend_table_list,
@@ -2791,7 +2850,6 @@ main(int argc, char *argv[])
                                     sbrec_port_binding_by_datapath,
                                     sbrec_port_binding_by_key,
                                     sbrec_port_binding_by_name,
-                                    sbrec_mac_binding_by_lport_ip,
                                     sbrec_igmp_group,
                                     sbrec_ip_multicast,
                                     sbrec_dns_table_get(ovnsb_idl_loop.idl),
