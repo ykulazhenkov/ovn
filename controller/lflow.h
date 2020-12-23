@@ -58,19 +58,24 @@ struct uuid;
  *
  * These are heavily documented in ovn-architecture(7), please update it if
  * you make any changes. */
-#define OFTABLE_PHY_TO_LOG            0
-#define OFTABLE_LOG_INGRESS_PIPELINE  8 /* First of LOG_PIPELINE_LEN tables. */
-#define OFTABLE_REMOTE_OUTPUT        32
-#define OFTABLE_LOCAL_OUTPUT         33
-#define OFTABLE_CHECK_LOOPBACK       34
-#define OFTABLE_LOG_EGRESS_PIPELINE  40 /* First of LOG_PIPELINE_LEN tables. */
-#define OFTABLE_SAVE_INPORT          64
-#define OFTABLE_LOG_TO_PHY           65
-#define OFTABLE_MAC_BINDING          66
-#define OFTABLE_MAC_LOOKUP           67
-#define OFTABLE_CHK_LB_HAIRPIN       68
-#define OFTABLE_CHK_LB_HAIRPIN_REPLY 69
-#define OFTABLE_CT_SNAT_FOR_VIP      70
+enum ovn_oftables {
+    OFTABLE_PHY_TO_LOG             =  0,
+    OFTABLE_LOG_INGRESS_PIPELINE   =  8, /* First of LOG_PIPELINE_LEN tables. */
+    OFTABLE_REMOTE_OUTPUT          = 32,
+    OFTABLE_LOCAL_OUTPUT           = 33,
+    OFTABLE_CHECK_LOOPBACK         = 34,
+    OFTABLE_LOG_EGRESS_PIPELINE    = 40, /* First of LOG_PIPELINE_LEN tables. */
+    OFTABLE_SAVE_INPORT            = 64,
+    OFTABLE_LOG_TO_PHY             = 65,
+    OFTABLE_MAC_BINDING            = 66,
+    OFTABLE_MAC_LOOKUP             = 67,
+    OFTABLE_CHK_LB_HAIRPIN         = 68,
+    OFTABLE_CHK_LB_HAIRPIN_REPLY   = 69,
+    OFTABLE_CT_SNAT_FOR_VIP        = 70,
+    __OFTABLE_MAX_TABLE_IDS
+};
+
+#define OFTABLE_MAX_TABLE_IDS __OFTABLE_MAX_TABLE_IDS
 
 /* The number of tables for the ingress and egress pipelines. */
 #define LOG_PIPELINE_LEN 24
@@ -146,7 +151,6 @@ struct lflow_ctx_in {
 };
 
 struct lflow_ctx_out {
-    struct ovn_desired_flow_table *flow_table;
     struct ovn_extend_table *group_table;
     struct ovn_extend_table *meter_table;
     struct lflow_resource_ref *lfrr;
@@ -164,9 +168,8 @@ bool lflow_handle_changed_ref(enum ref_type, const char *ref_name,
 void lflow_handle_changed_neighbors(
     struct ovsdb_idl_index *sbrec_port_binding_by_name,
     const struct sbrec_mac_binding_table *,
-    const struct hmap *local_datapaths,
-    struct ovn_desired_flow_table *);
-bool lflow_handle_changed_lbs(struct lflow_ctx_in *, struct lflow_ctx_out *);
+    const struct hmap *local_datapaths);
+bool lflow_handle_changed_lbs(struct lflow_ctx_in *);
 void lflow_destroy(void);
 
 void lflow_cache_init(struct hmap *);

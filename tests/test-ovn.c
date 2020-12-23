@@ -34,11 +34,13 @@
 #include "ovn/logical-fields.h"
 #include "lib/ovn-l7.h"
 #include "lib/extend-table.h"
+#include "lib/uuid.h"
 #include "ovs-thread.h"
 #include "ovstest.h"
 #include "openvswitch/shash.h"
 #include "simap.h"
 #include "util.h"
+#include "controller/dp-flow-mgr.h"
 #include "controller/lflow.h"
 
 /* --relops: Bitmap of the relational operators to test, in exhaustive test. */
@@ -383,6 +385,266 @@ static void
 test_expr_to_flows(struct ovs_cmdl_context *ctx OVS_UNUSED)
 {
     test_parse_expr__(4);
+}
+
+static void
+lflow_to_of_flows(uint32_t dp_key, char *match, char *action,
+                  struct uuid lflow_uuid, uint8_t ptable, uint16_t priority,
+                  struct shash *symtab, struct shash *addr_sets,
+                  struct shash *port_groups, struct simap *ports,
+                  struct ovn_extend_table *group_table,
+                  struct ovn_extend_table *meter_table,
+                  size_t *conj_id_ofs)
+{
+    struct expr *expr;
+    char *error;
+
+    struct hmap dhcp_opts;
+    struct hmap dhcpv6_opts;
+    struct hmap nd_ra_opts;
+    struct controller_event_options event_opts;
+    struct ofpbuf ovnacts;
+    struct expr *prereqs;
+
+    fprintf(stdout, "lflow_to_of_flows : match = [%s]\n", match);
+    create_gen_opts(&dhcp_opts, &dhcpv6_opts, &nd_ra_opts, &event_opts);
+
+    ofpbuf_init(&ovnacts, 0);
+
+    const struct ovnact_parse_params pp = {
+        .symtab = symtab,
+        .dhcp_opts = &dhcp_opts,
+        .dhcpv6_opts = &dhcpv6_opts,
+        .nd_ra_opts = &nd_ra_opts,
+        .controller_event_opts = &event_opts,
+        .n_tables = 24,
+        .cur_ltable = 10,
+    };
+    error = ovnacts_parse_string(action, &pp, &ovnacts, &prereqs);
+    if (error) {
+        fprintf(stdout, "ovnacts_parse_string failed : [%s]", error);
+        free(error);
+        goto end;
+    }
+
+    /* Encode the actions into OpenFlow and print. */
+    const struct ovnact_encode_params ep = {
+        .lookup_port = lookup_port_cb,
+        .tunnel_ofport = lookup_tunnel_ofport,
+        .aux = &ports,
+        .is_switch = true,
+        .group_table = group_table,
+        .meter_table = meter_table,
+
+        .pipeline = OVNACT_P_INGRESS,
+        .ingress_ptable = OFTABLE_LOG_INGRESS_PIPELINE,
+        .egress_ptable = OFTABLE_LOG_EGRESS_PIPELINE,
+        .output_ptable = OFTABLE_SAVE_INPORT,
+        .mac_bind_ptable = OFTABLE_MAC_BINDING,
+        .mac_lookup_ptable = OFTABLE_MAC_LOOKUP,
+        .lb_hairpin_ptable = OFTABLE_CHK_LB_HAIRPIN,
+        .lb_hairpin_reply_ptable = OFTABLE_CHK_LB_HAIRPIN_REPLY,
+        .ct_snat_vip_ptable = OFTABLE_CT_SNAT_FOR_VIP,
+    };
+    struct ofpbuf ofpacts;
+    ofpbuf_init(&ofpacts, 0);
+    ovnacts_encode(ovnacts.data, ovnacts.size, &ep, &ofpacts);
+
+    expr = expr_parse_string(match, symtab, addr_sets,
+                             port_groups, NULL, NULL, 0, &error);
+    if (error) {
+        fputs("expr_parse_string failed", stdout);
+        goto end;
+    }
+    
+    if (prereqs) {
+        expr = expr_combine(EXPR_T_AND, expr, prereqs);
+    }
+    expr = expr_annotate(expr, symtab, &error);
+    
+    if (error) {
+        fputs("expr_annotate failed", stdout);
+        goto end;
+    }
+    expr = expr_simplify(expr);
+    expr = expr_evaluate_condition(expr, is_chassis_resident_cb,
+                                   &ports, NULL);
+    expr = expr_normalize(expr);
+    ovs_assert(expr_is_normalized(expr));
+    struct hmap matches;
+    expr_to_matches(expr, lookup_port_cb, &ports, &matches);
+    expr_destroy(expr);
+    if (hmap_is_empty(&matches)) {
+        fputs("Dude.. matches are empty", stdout);
+        goto end;
+    }
+
+    struct expr_match *m;
+    HMAP_FOR_EACH (m, hmap_node, &matches) {
+        match_set_metadata(&m->match, htonll(dp_key));
+
+        if (m->match.wc.masks.conj_id) {
+            m->match.flow.conj_id += *conj_id_ofs;
+        }
+
+        if (!m->n) {
+            dp_flow_add_logical_oflow(dp_key, ptable, priority,
+                                      lflow_uuid.parts[0], &m->match, &ofpacts,
+                                      &lflow_uuid);
+        } else {
+            uint64_t conj_stubs[64 / 8];
+            struct ofpbuf conj;
+
+            ofpbuf_use_stub(&conj, conj_stubs, sizeof conj_stubs);
+            for (int i = 0; i < m->n; i++) {
+                const struct cls_conjunction *src = &m->conjunctions[i];
+                struct ofpact_conjunction *dst;
+
+                dst = ofpact_put_CONJUNCTION(&conj);
+                dst->id = src->id + *conj_id_ofs;
+                dst->clause = src->clause;
+                dst->n_clauses = src->n_clauses;
+            }
+
+            dp_flow_add_logical_oflow(dp_key, ptable, priority,
+                                      lflow_uuid.parts[0], &m->match, &conj,
+                                      &lflow_uuid);
+            ofpbuf_uninit(&conj);
+        }
+    }
+    expr_matches_destroy(&matches);
+end:
+    ovnacts_free(ovnacts.data, ovnacts.size);
+    ofpbuf_uninit(&ovnacts);
+    dhcp_opts_destroy(&dhcp_opts);
+    dhcp_opts_destroy(&dhcpv6_opts);
+    nd_ra_opts_destroy(&nd_ra_opts);
+    controller_event_opts_destroy(&event_opts);
+}
+
+static void
+test_lflows_to_dp_flows(struct ovs_cmdl_context *ctx OVS_UNUSED)
+{
+    struct shash symtab;
+    struct shash addr_sets;
+    struct shash port_groups;
+    struct simap ports;
+    struct ds input;
+
+    create_symtab(&symtab);
+    create_addr_sets(&addr_sets);
+    create_port_groups(&port_groups);
+
+    simap_init(&ports);
+    simap_put(&ports, "eth0", 5);
+    simap_put(&ports, "eth1", 6);
+    simap_put(&ports, "LOCAL", ofp_to_u16(OFPP_LOCAL));
+    simap_put(&ports, "lsp1", 0x11);
+    simap_put(&ports, "lsp2", 0x12);
+    simap_put(&ports, "lsp3", 0x13);
+
+    ds_init(&input);
+
+    struct ovn_extend_table group_table;
+    ovn_extend_table_init(&group_table);
+
+    /* Initialize meter ids for QoS. */
+    struct ovn_extend_table meter_table;
+    ovn_extend_table_init(&meter_table);
+    size_t conj_id_ofs = 0;
+//    conj_id_ofs = conj_id_ofs;
+#if 0
+    while (!ds_get_test_line(&input, stdin)) {
+        struct expr *expr;
+        char *error;
+
+        expr = expr_parse_string(ds_cstr(&input), &symtab, &addr_sets,
+                                 &port_groups, NULL, NULL, 0, &error);
+        if (!error) {
+            expr = expr_annotate(expr, &symtab, &error);
+        }
+        if (!error) {
+            expr = expr_simplify(expr);
+            expr = expr_evaluate_condition(expr, is_chassis_resident_cb,
+            expr = expr_normalize(expr);
+            ovs_assert(expr_is_normalized(expr));
+            struct hmap matches;
+            expr_to_matches(expr, lookup_port_cb, &ports, &matches);
+        }
+        if (!error) {
+            if (steps > 3) {
+                struct hmap matches;
+
+                expr_to_matches(expr, lookup_port_cb, &ports, &matches);
+                expr_matches_print(&matches, stdout);
+                expr_matches_destroy(&matches);
+            } else {
+                struct ds output = DS_EMPTY_INITIALIZER;
+                expr_format(expr, &output);
+                puts(ds_cstr(&output));
+                ds_destroy(&output);
+            }
+        } else {
+            puts(error);
+            free(error);
+        }
+        expr_destroy(expr);
+    }
+#endif
+
+
+    struct uuid lflow_uuid = UUID_ZERO;
+    lflow_uuid.parts[0] = 1;
+    lflow_to_of_flows(1, "ip4 && tcp", "drop;", lflow_uuid, 1, 10,
+                      &symtab, &addr_sets, &port_groups, &ports, &group_table,
+                      &meter_table, &conj_id_ofs);
+    dp_flow_print_oflows(1, stdout); 
+
+    lflow_uuid.parts[0] = 2;
+    lflow_to_of_flows(1, "ip4 && tcp", "next;", lflow_uuid, 1, 10,
+                      &symtab, &addr_sets, &port_groups, &ports, &group_table,
+                      &meter_table, &conj_id_ofs);
+    dp_flow_print_oflows(1, stdout);
+    lflow_to_of_flows(1, "ip4 && udp", "next;", lflow_uuid, 1, 10,
+                      &symtab, &addr_sets, &port_groups, &ports, &group_table,
+                      &meter_table, &conj_id_ofs);
+    dp_flow_print_oflows(1, stdout);
+    lflow_uuid.parts[0] = 1;
+    lflow_to_of_flows(1, "ip4.src == {10.0.0.5,10.0.0.6} && ip4.dst == {20.0.0.3,20.0.0.4} && (tcp || udp)",
+                      "eth.dst = 00:00:00:00:10:01; next;", lflow_uuid, 2, 100,
+                      &symtab, &addr_sets, &port_groups, &ports, &group_table,
+                      &meter_table, &conj_id_ofs);
+                      //nd || nd_rs || nd_ra || mldv1 || mldv2
+    lflow_uuid.parts[0] = 4;
+    lflow_to_of_flows(1, "nd || nd_rs || nd_ra || mldv1 || mldv2",
+                      "next;", lflow_uuid, 2, 100,
+                      &symtab, &addr_sets, &port_groups, &ports, &group_table,
+                      &meter_table, &conj_id_ofs);    
+    dp_flow_print_oflows(1, stdout);
+    /*
+    struct ovs_list msgs = OVS_LIST_INITIALIZER(&msgs);
+    dp_flow_populate_oflow_msgs(&msgs);
+    dp_flow_remove_logical_oflows(1, &lflow_uuid);
+    dp_flow_print_oflows(1, stdout);
+    lflow_uuid.parts[0] = 2;
+    dp_flow_remove_logical_oflows(1, &lflow_uuid);
+    dp_flow_print_oflows(1, stdout);
+    lflow_uuid.parts[0] = 1;
+    dp_flow_remove_logical_oflows(1, &lflow_uuid);
+    dp_flow_print_oflows(1, stdout);
+    */
+    dp_flow_tables_destroy();
+    ds_destroy(&input);
+
+    ovn_extend_table_destroy(&group_table);
+    ovn_extend_table_destroy(&meter_table);
+    simap_destroy(&ports);
+    expr_symtab_destroy(&symtab);
+    shash_destroy(&symtab);
+    expr_const_sets_destroy(&addr_sets);
+    shash_destroy(&addr_sets);
+    expr_const_sets_destroy(&port_groups);
+    shash_destroy(&port_groups);
 }
 
 /* Print the symbol table. */
@@ -1623,10 +1885,10 @@ test_ovn_main(int argc, char *argv[])
         {"tree-shape", NULL, 1, 1, test_tree_shape, OVS_RO},
         {"exhaustive", NULL, 1, 1, test_exhaustive, OVS_RO},
         {"expr-to-packets", NULL, 0, 0, test_expr_to_packets, OVS_RO},
-
         /* Actions. */
         {"parse-actions", NULL, 0, 0, test_parse_actions, OVS_RO},
 
+        {"lflows-to-dp-flows", NULL, 0, 0, test_lflows_to_dp_flows, OVS_RO},
         {NULL, NULL, 0, 0, NULL, OVS_RO},
     };
     struct ovs_cmdl_context ctx;

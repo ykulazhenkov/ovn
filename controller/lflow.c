@@ -14,6 +14,7 @@
  */
 
 #include <config.h>
+#include "dp-flow-mgr.h"
 #include "lflow.h"
 #include "coverage.h"
 #include "ha-chassis.h"
@@ -156,6 +157,28 @@ is_chassis_resident_cb(const void *c_aux_, const char *port_name)
             return active;
         }
         return false;
+    }
+}
+
+static void
+lflow_remove_dp_flows(const struct sbrec_logical_flow *lflow)
+{
+    const struct sbrec_logical_dp_group *dp_group = lflow->logical_dp_group;
+    const struct sbrec_datapath_binding *dp = lflow->logical_datapath;
+
+    if (!dp_group && !dp) {
+        return;
+    }
+
+    ovs_assert(!dp_group || !dp);
+
+    if (dp) {
+        dp_flow_remove_logical_oflows(dp->tunnel_key, &lflow->header_.uuid);
+    }
+
+    for (size_t i = 0; dp_group && i < dp_group->n_datapaths; i++) {
+        dp_flow_remove_logical_oflows(dp_group->datapaths[i]->tunnel_key,
+                                      &lflow->header_.uuid);
     }
 }
 
@@ -485,45 +508,44 @@ lflow_handle_changed_flows(struct lflow_ctx_in *l_ctx_in,
      * removed and added with same match conditions can be processed in the
      * proper order */
 
-    struct hmap flood_remove_nodes = HMAP_INITIALIZER(&flood_remove_nodes);
-    struct ofctrl_flood_remove_node *ofrn, *next;
     SBREC_LOGICAL_FLOW_TABLE_FOR_EACH_TRACKED (lflow,
                                                l_ctx_in->logical_flow_table) {
         if (!sbrec_logical_flow_is_new(lflow)) {
             VLOG_DBG("delete lflow "UUID_FMT,
                      UUID_ARGS(&lflow->header_.uuid));
-            ofrn = xmalloc(sizeof *ofrn);
-            ofrn->sb_uuid = lflow->header_.uuid;
-            hmap_insert(&flood_remove_nodes, &ofrn->hmap_node,
-                        uuid_hash(&ofrn->sb_uuid));
+            lflow_remove_dp_flows(lflow);
+            ovn_extend_table_remove_desired(l_ctx_out->group_table,
+                                            &lflow->header_.uuid);
+            ovn_extend_table_remove_desired(l_ctx_out->meter_table,
+                                            &lflow->header_.uuid);
             if (l_ctx_out->lflow_cache_map) {
                 lflow_cache_delete(l_ctx_out->lflow_cache_map, lflow);
             }
         }
     }
-    ofctrl_flood_remove_flows(l_ctx_out->flow_table, &flood_remove_nodes);
-    HMAP_FOR_EACH (ofrn, hmap_node, &flood_remove_nodes) {
-        /* Delete entries from lflow resource reference. */
-        lflow_resource_destroy_lflow(l_ctx_out->lfrr, &ofrn->sb_uuid);
-        /* Reprocessing the lflow if the sb record is not deleted. */
-        lflow = sbrec_logical_flow_table_get_for_uuid(
-            l_ctx_in->logical_flow_table, &ofrn->sb_uuid);
-        if (lflow) {
-            VLOG_DBG("re-add lflow "UUID_FMT,
-                     UUID_ARGS(&lflow->header_.uuid));
-            if (!consider_logical_flow(lflow, &dhcp_opts, &dhcpv6_opts,
-                                       &nd_ra_opts, &controller_event_opts,
-                                       l_ctx_in, l_ctx_out)) {
-                ret = false;
-                break;
+
+    SBREC_LOGICAL_FLOW_TABLE_FOR_EACH_TRACKED (lflow,
+                                               l_ctx_in->logical_flow_table) {
+        if (!sbrec_logical_flow_is_new(lflow)) {
+            /* Delete entries from lflow resource reference. */
+            lflow_resource_destroy_lflow(l_ctx_out->lfrr,
+                                         &lflow->header_.uuid);
+            /* Reprocessing the lflow if the sb record is not deleted. */
+            const struct sbrec_logical_flow *lflow_;
+            lflow_ = sbrec_logical_flow_table_get_for_uuid(
+                l_ctx_in->logical_flow_table, &lflow->header_.uuid);
+            if (lflow_) {
+                VLOG_DBG("re-add lflow "UUID_FMT,
+                        UUID_ARGS(&lflow_->header_.uuid));
+                if (!consider_logical_flow(lflow_, &dhcp_opts, &dhcpv6_opts,
+                                           &nd_ra_opts, &controller_event_opts,
+                                           l_ctx_in, l_ctx_out)) {
+                    ret = false;
+                    break;
+                }
             }
         }
     }
-    HMAP_FOR_EACH_SAFE (ofrn, next, hmap_node, &flood_remove_nodes) {
-        hmap_remove(&flood_remove_nodes, &ofrn->hmap_node);
-        free(ofrn);
-    }
-    hmap_destroy(&flood_remove_nodes);
 
     /* Now handle new lflows only. */
     SBREC_LOGICAL_FLOW_TABLE_FOR_EACH_TRACKED (lflow,
@@ -599,29 +621,25 @@ lflow_handle_changed_ref(enum ref_type ref_type, const char *ref_name,
     controller_event_opts_init(&controller_event_opts);
 
     /* Re-parse the related lflows. */
-    /* Firstly, flood remove the flows from desired flow table. */
-    struct hmap flood_remove_nodes = HMAP_INITIALIZER(&flood_remove_nodes);
-    struct ofctrl_flood_remove_node *ofrn, *ofrn_next;
     HMAP_FOR_EACH (lrln, hmap_node, &rlfn->lflow_uuids) {
-        VLOG_DBG("Reprocess lflow "UUID_FMT" for resource type: %d,"
-                 " name: %s.",
-                 UUID_ARGS(&lrln->lflow_uuid),
-                 ref_type, ref_name);
-        ofctrl_flood_remove_add_node(&flood_remove_nodes, &lrln->lflow_uuid);
+        ovn_extend_table_remove_desired(l_ctx_out->group_table,
+                                        &lrln->lflow_uuid);
+        ovn_extend_table_remove_desired(l_ctx_out->meter_table,
+                                        &lrln->lflow_uuid);
+        dp_flow_remove_logical_oflows_all(&lrln->lflow_uuid);
     }
-    ofctrl_flood_remove_flows(l_ctx_out->flow_table, &flood_remove_nodes);
 
     /* Secondly, for each lflow that is actually removed, reprocessing it. */
-    HMAP_FOR_EACH (ofrn, hmap_node, &flood_remove_nodes) {
-        lflow_resource_destroy_lflow(l_ctx_out->lfrr, &ofrn->sb_uuid);
+    HMAP_FOR_EACH (lrln, hmap_node, &rlfn->lflow_uuids) {
+        lflow_resource_destroy_lflow(l_ctx_out->lfrr, &lrln->lflow_uuid);
 
         const struct sbrec_logical_flow *lflow =
             sbrec_logical_flow_table_get_for_uuid(l_ctx_in->logical_flow_table,
-                                                  &ofrn->sb_uuid);
+                                                  &lrln->lflow_uuid);
         if (!lflow) {
             VLOG_DBG("lflow "UUID_FMT" not found while reprocessing for"
                      " resource type: %d, name: %s.",
-                     UUID_ARGS(&ofrn->sb_uuid),
+                     UUID_ARGS(&lrln->lflow_uuid),
                      ref_type, ref_name);
             continue;
         }
@@ -635,11 +653,7 @@ lflow_handle_changed_ref(enum ref_type ref_type, const char *ref_name,
         }
         *changed = true;
     }
-    HMAP_FOR_EACH_SAFE (ofrn, ofrn_next, hmap_node, &flood_remove_nodes) {
-        hmap_remove(&flood_remove_nodes, &ofrn->hmap_node);
-        free(ofrn);
-    }
-    hmap_destroy(&flood_remove_nodes);
+
 
     HMAP_FOR_EACH_SAFE (lrln, next, hmap_node, &rlfn->lflow_uuids) {
         hmap_remove(&rlfn->lflow_uuids, &lrln->hmap_node);
@@ -731,9 +745,11 @@ add_matches_to_flow_table(const struct sbrec_logical_flow *lflow,
             }
         }
         if (!m->n) {
-            ofctrl_add_flow(l_ctx_out->flow_table, ptable, lflow->priority,
-                            lflow->header_.uuid.parts[0], &m->match, &ofpacts,
-                            &lflow->header_.uuid);
+            dp_flow_add_logical_oflow(dp->tunnel_key, ptable,
+                                      lflow->priority,
+                                      lflow->header_.uuid.parts[0],
+                                      &m->match, &ofpacts,
+                                      &lflow->header_.uuid);
         } else {
             uint64_t conj_stubs[64 / 8];
             struct ofpbuf conj;
@@ -749,10 +765,16 @@ add_matches_to_flow_table(const struct sbrec_logical_flow *lflow,
                 dst->n_clauses = src->n_clauses;
             }
 
-            ofctrl_add_or_append_flow(l_ctx_out->flow_table, ptable,
-                                      lflow->priority, 0,
-                                      &m->match, &conj, &lflow->header_.uuid);
+            dp_flow_add_logical_oflow(dp->tunnel_key, ptable,
+                                      lflow->priority,
+                                      lflow->header_.uuid.parts[0],
+                                      &m->match, &conj,
+                                      &lflow->header_.uuid);
             ofpbuf_uninit(&conj);
+        }
+
+        if (m->match.wc.masks.conj_id) {
+            m->match.flow.conj_id -= conj_id_ofs;
         }
     }
 
@@ -1083,8 +1105,7 @@ put_load(const uint8_t *data, size_t len,
 static void
 consider_neighbor_flow(struct ovsdb_idl_index *sbrec_port_binding_by_name,
                        const struct hmap *local_datapaths,
-                       const struct sbrec_mac_binding *b,
-                       struct ovn_desired_flow_table *flow_table)
+                       const struct sbrec_mac_binding *b)
 {
     const struct sbrec_port_binding *pb
         = lport_lookup_by_name(sbrec_port_binding_by_name, b->logical_port);
@@ -1143,17 +1164,20 @@ consider_neighbor_flow(struct ovsdb_idl_index *sbrec_port_binding_by_name,
     put_load(mac.ea, sizeof mac.ea, MFF_ETH_DST, 0, 48, &ofpacts);
     put_load(&value, sizeof value, MFF_LOG_FLAGS, MLF_LOOKUP_MAC_BIT, 1,
              &ofpacts);
-    ofctrl_add_flow(flow_table, OFTABLE_MAC_BINDING, 100,
-                    b->header_.uuid.parts[0], &get_arp_match,
-                    &ofpacts, &b->header_.uuid);
+    dp_flow_add_logical_oflow(pb->datapath->tunnel_key,
+                              OFTABLE_MAC_BINDING, 100,
+                              b->header_.uuid.parts[0],
+                              &get_arp_match, &ofpacts,
+                              &b->header_.uuid);
 
     ofpbuf_clear(&ofpacts);
     put_load(&value, sizeof value, MFF_LOG_FLAGS, MLF_LOOKUP_MAC_BIT, 1,
              &ofpacts);
     match_set_dl_src(&lookup_arp_match, mac);
-    ofctrl_add_flow(flow_table, OFTABLE_MAC_LOOKUP, 100,
-                    b->header_.uuid.parts[0], &lookup_arp_match,
-                    &ofpacts, &b->header_.uuid);
+    dp_flow_add_logical_oflow(pb->datapath->tunnel_key,
+                              OFTABLE_MAC_LOOKUP, 100,
+                              b->header_.uuid.parts[0], &lookup_arp_match,
+                              &ofpacts, &b->header_.uuid);
 
     ofpbuf_uninit(&ofpacts);
 }
@@ -1163,13 +1187,11 @@ consider_neighbor_flow(struct ovsdb_idl_index *sbrec_port_binding_by_name,
 static void
 add_neighbor_flows(struct ovsdb_idl_index *sbrec_port_binding_by_name,
                    const struct sbrec_mac_binding_table *mac_binding_table,
-                   const struct hmap *local_datapaths,
-                   struct ovn_desired_flow_table *flow_table)
+                   const struct hmap *local_datapaths)
 {
     const struct sbrec_mac_binding *b;
     SBREC_MAC_BINDING_TABLE_FOR_EACH (b, mac_binding_table) {
-        consider_neighbor_flow(sbrec_port_binding_by_name, local_datapaths,
-                               b, flow_table);
+        consider_neighbor_flow(sbrec_port_binding_by_name, local_datapaths, b);
     }
 }
 
@@ -1177,8 +1199,7 @@ static void
 add_lb_vip_hairpin_flows(struct ovn_controller_lb *lb,
                          struct ovn_lb_vip *lb_vip,
                          struct ovn_lb_backend *lb_backend,
-                         uint8_t lb_proto,
-                         struct ovn_desired_flow_table *flow_table)
+                         uint8_t lb_proto)
 {
     uint64_t stub[1024 / 8];
     struct ofpbuf ofpacts = OFPBUF_STUB_INITIALIZER(stub);
@@ -1236,18 +1257,19 @@ add_lb_vip_hairpin_flows(struct ovn_controller_lb *lb,
     };
     match_set_ct_label_masked(&hairpin_match, lb_ct_label, lb_ct_label);
 
-    ofctrl_add_flow(flow_table, OFTABLE_CHK_LB_HAIRPIN, 100,
-                    lb->slb->header_.uuid.parts[0], &hairpin_match,
-                    &ofpacts, &lb->slb->header_.uuid);
+    dp_flow_add_logical_oflow(0, OFTABLE_CHK_LB_HAIRPIN, 100,
+                              lb->slb->header_.uuid.parts[0], &hairpin_match,
+                              &ofpacts, &lb->slb->header_.uuid);
 
     for (size_t i = 0; i < lb->slb->n_datapaths; i++) {
         match_set_metadata(&hairpin_reply_match,
                            htonll(lb->slb->datapaths[i]->tunnel_key));
 
-        ofctrl_add_flow(flow_table, OFTABLE_CHK_LB_HAIRPIN_REPLY, 100,
-                        lb->slb->header_.uuid.parts[0],
-                        &hairpin_reply_match,
-                        &ofpacts, &lb->slb->header_.uuid);
+        dp_flow_add_logical_oflow(lb->slb->datapaths[i]->tunnel_key,
+                                  OFTABLE_CHK_LB_HAIRPIN_REPLY, 100,
+                                  lb->slb->header_.uuid.parts[0],
+                                  &hairpin_reply_match,
+                                  &ofpacts, &lb->slb->header_.uuid);
     }
 
     ofpbuf_uninit(&ofpacts);
@@ -1255,8 +1277,7 @@ add_lb_vip_hairpin_flows(struct ovn_controller_lb *lb,
 
 static void
 add_lb_ct_snat_vip_flows(struct ovn_controller_lb *lb,
-                         struct ovn_lb_vip *lb_vip,
-                         struct ovn_desired_flow_table *flow_table)
+                         struct ovn_lb_vip *lb_vip)
 {
     uint64_t stub[1024 / 8];
     struct ofpbuf ofpacts = OFPBUF_STUB_INITIALIZER(stub);
@@ -1303,9 +1324,10 @@ add_lb_ct_snat_vip_flows(struct ovn_controller_lb *lb,
         match_set_metadata(&match,
                            htonll(lb->slb->datapaths[i]->tunnel_key));
 
-        ofctrl_add_flow(flow_table, OFTABLE_CT_SNAT_FOR_VIP, 100,
-                        lb->slb->header_.uuid.parts[0],
-                        &match, &ofpacts, &lb->slb->header_.uuid);
+        dp_flow_add_logical_oflow(lb->slb->datapaths[i]->tunnel_key,
+                                  OFTABLE_CT_SNAT_FOR_VIP, 100,
+                                  lb->slb->header_.uuid.parts[0],
+                                  &match, &ofpacts, &lb->slb->header_.uuid);
     }
 
     ofpbuf_uninit(&ofpacts);
@@ -1313,8 +1335,7 @@ add_lb_ct_snat_vip_flows(struct ovn_controller_lb *lb,
 
 static void
 consider_lb_hairpin_flows(const struct sbrec_load_balancer *sbrec_lb,
-                          const struct hmap *local_datapaths,
-                          struct ovn_desired_flow_table *flow_table)
+                          const struct hmap *local_datapaths)
 {
     /* Check if we need to add flows or not.  If there is one datapath
      * in the local_datapaths, it means all the datapaths of the lb
@@ -1347,11 +1368,10 @@ consider_lb_hairpin_flows(const struct sbrec_load_balancer *sbrec_lb,
         for (size_t j = 0; j < lb_vip->n_backends; j++) {
             struct ovn_lb_backend *lb_backend = &lb_vip->backends[j];
 
-            add_lb_vip_hairpin_flows(lb, lb_vip, lb_backend, lb_proto,
-                                     flow_table);
+            add_lb_vip_hairpin_flows(lb, lb_vip, lb_backend, lb_proto);
         }
 
-        add_lb_ct_snat_vip_flows(lb, lb_vip, flow_table);
+        add_lb_ct_snat_vip_flows(lb, lb_vip);
     }
 
     ovn_controller_lb_destroy(lb);
@@ -1361,12 +1381,11 @@ consider_lb_hairpin_flows(const struct sbrec_load_balancer *sbrec_lb,
  * backends to handle the load balanced hairpin traffic. */
 static void
 add_lb_hairpin_flows(const struct sbrec_load_balancer_table *lb_table,
-                     const struct hmap *local_datapaths,
-                     struct ovn_desired_flow_table *flow_table)
+                     const struct hmap *local_datapaths)
 {
     const struct sbrec_load_balancer *lb;
     SBREC_LOAD_BALANCER_TABLE_FOR_EACH (lb, lb_table) {
-        consider_lb_hairpin_flows(lb, local_datapaths, flow_table);
+        consider_lb_hairpin_flows(lb, local_datapaths);
     }
 }
 
@@ -1375,8 +1394,7 @@ void
 lflow_handle_changed_neighbors(
     struct ovsdb_idl_index *sbrec_port_binding_by_name,
     const struct sbrec_mac_binding_table *mac_binding_table,
-    const struct hmap *local_datapaths,
-    struct ovn_desired_flow_table *flow_table)
+    const struct hmap *local_datapaths)
 {
     const struct sbrec_mac_binding *mb;
     /* Handle deleted mac_bindings first, to avoid *duplicated flow* problem
@@ -1386,7 +1404,8 @@ lflow_handle_changed_neighbors(
         if (sbrec_mac_binding_is_deleted(mb)) {
             VLOG_DBG("handle deleted mac_binding "UUID_FMT,
                      UUID_ARGS(&mb->header_.uuid));
-            ofctrl_remove_flows(flow_table, &mb->header_.uuid);
+            dp_flow_remove_logical_oflows(mb->datapath->tunnel_key,
+                                          &mb->header_.uuid);
         }
     }
     SBREC_MAC_BINDING_TABLE_FOR_EACH_TRACKED (mb, mac_binding_table) {
@@ -1394,12 +1413,11 @@ lflow_handle_changed_neighbors(
             if (!sbrec_mac_binding_is_new(mb)) {
                 VLOG_DBG("handle updated mac_binding "UUID_FMT,
                          UUID_ARGS(&mb->header_.uuid));
-                ofctrl_remove_flows(flow_table, &mb->header_.uuid);
             }
             VLOG_DBG("handle new mac_binding "UUID_FMT,
                      UUID_ARGS(&mb->header_.uuid));
-            consider_neighbor_flow(sbrec_port_binding_by_name, local_datapaths,
-                                   mb, flow_table);
+            consider_neighbor_flow(sbrec_port_binding_by_name,
+                                   local_datapaths, mb);
         }
     }
 }
@@ -1427,10 +1445,8 @@ lflow_run(struct lflow_ctx_in *l_ctx_in, struct lflow_ctx_out *l_ctx_out)
 
     add_logical_flows(l_ctx_in, l_ctx_out);
     add_neighbor_flows(l_ctx_in->sbrec_port_binding_by_name,
-                       l_ctx_in->mac_binding_table, l_ctx_in->local_datapaths,
-                       l_ctx_out->flow_table);
-    add_lb_hairpin_flows(l_ctx_in->lb_table, l_ctx_in->local_datapaths,
-                         l_ctx_out->flow_table);
+                       l_ctx_in->mac_binding_table, l_ctx_in->local_datapaths);
+    add_lb_hairpin_flows(l_ctx_in->lb_table, l_ctx_in->local_datapaths);
 }
 
 void
@@ -1527,8 +1543,7 @@ lflow_processing_end:
      * associated. */
     for (size_t i = 0; i < dp->n_load_balancers; i++) {
         consider_lb_hairpin_flows(dp->load_balancers[i],
-                                  l_ctx_in->local_datapaths,
-                                  l_ctx_out->flow_table);
+                                  l_ctx_in->local_datapaths);
     }
 
     return handled;
@@ -1550,8 +1565,7 @@ lflow_handle_flows_for_lport(const struct sbrec_port_binding *pb,
 }
 
 bool
-lflow_handle_changed_lbs(struct lflow_ctx_in *l_ctx_in,
-                         struct lflow_ctx_out *l_ctx_out)
+lflow_handle_changed_lbs(struct lflow_ctx_in *l_ctx_in)
 {
     const struct sbrec_load_balancer *lb;
 
@@ -1559,7 +1573,13 @@ lflow_handle_changed_lbs(struct lflow_ctx_in *l_ctx_in,
         if (sbrec_load_balancer_is_deleted(lb)) {
             VLOG_DBG("Remove hairpin flows for deleted load balancer "UUID_FMT,
                      UUID_ARGS(&lb->header_.uuid));
-            ofctrl_remove_flows(l_ctx_out->flow_table, &lb->header_.uuid);
+
+            for (size_t i = 0; i < lb->n_datapaths; i++) {
+                dp_flow_remove_logical_oflows(lb->datapaths[i]->tunnel_key,
+                                              &lb->header_.uuid); 
+            }
+            dp_flow_remove_logical_oflows(DP_FLOW_TABLE_GLOBAL_KEY,
+                                          &lb->header_.uuid);
         }
     }
 
@@ -1568,16 +1588,9 @@ lflow_handle_changed_lbs(struct lflow_ctx_in *l_ctx_in,
             continue;
         }
 
-        if (!sbrec_load_balancer_is_new(lb)) {
-            VLOG_DBG("Remove hairpin flows for updated load balancer "UUID_FMT,
-                     UUID_ARGS(&lb->header_.uuid));
-            ofctrl_remove_flows(l_ctx_out->flow_table, &lb->header_.uuid);
-        }
-
         VLOG_DBG("Add load balancer hairpin flows for "UUID_FMT,
                  UUID_ARGS(&lb->header_.uuid));
-        consider_lb_hairpin_flows(lb, l_ctx_in->local_datapaths,
-                                  l_ctx_out->flow_table);
+        consider_lb_hairpin_flows(lb, l_ctx_in->local_datapaths);
     }
 
     return true;
