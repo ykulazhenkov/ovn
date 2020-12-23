@@ -208,7 +208,7 @@ tests_ovstest_SOURCES = \
 	tests/test-ovn.c
 
 tests_ovstest_LDADD = $(OVS_LIBDIR)/daemon.lo \
-    $(OVS_LIBDIR)/libopenvswitch.la lib/libovn.la
+    $(OVS_LIBDIR)/libopenvswitch.la lib/libovn.la controller/dp-flow-mgr.o
 
 # Python tests.
 CHECK_PYFILES = \
