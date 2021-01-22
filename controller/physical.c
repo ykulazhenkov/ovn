@@ -249,7 +249,7 @@ put_remote_port_redirect_bridged(const struct
                                  struct local_datapath *ld,
                                  struct match *match,
                                  struct ofpbuf *ofpacts_p,
-                                 struct ovn_desired_flow_table *flow_table)
+                                 struct ovn_flow_table *flow_table)
 {
         if (strcmp(binding->type, "chassisredirect")) {
             /* bridged based redirect is only supported for chassisredirect
@@ -321,7 +321,7 @@ put_remote_port_redirect_overlay(const struct
                                  uint32_t port_key,
                                  struct match *match,
                                  struct ofpbuf *ofpacts_p,
-                                 struct ovn_desired_flow_table *flow_table)
+                                 struct ovn_flow_table *flow_table)
 {
     if (!is_ha_remote) {
         /* Setup encapsulation */
@@ -482,7 +482,7 @@ static void
 put_chassis_mac_conj_id_flow(const struct sbrec_chassis_table *chassis_table,
                              const struct sbrec_chassis *chassis,
                              struct ofpbuf *ofpacts_p,
-                             struct ovn_desired_flow_table *flow_table)
+                             struct ovn_flow_table *flow_table)
 {
     struct match match;
     struct remote_chassis_mac *mac;
@@ -525,7 +525,7 @@ put_replace_chassis_mac_flows(const struct simap *ct_zones,
                               const struct hmap *local_datapaths,
                               struct ofpbuf *ofpacts_p,
                               ofp_port_t ofport,
-                              struct ovn_desired_flow_table *flow_table)
+                              struct ovn_flow_table *flow_table)
 {
     /* Packets arriving on localnet port, could have been routed on
      * source chassis and hence will have a chassis mac.
@@ -619,7 +619,7 @@ put_replace_router_port_mac_flows(struct ovsdb_idl_index
                                   const struct hmap *local_datapaths,
                                   struct ofpbuf *ofpacts_p,
                                   ofp_port_t ofport,
-                                  struct ovn_desired_flow_table *flow_table)
+                                  struct ovn_flow_table *flow_table)
 {
     struct local_datapath *ld = get_local_datapath(local_datapaths,
                                                    localnet_port->datapath->
@@ -715,7 +715,7 @@ put_local_common_flows(uint32_t dp_key, uint32_t port_key,
                        uint32_t parent_port_key,
                        const struct zone_ids *zone_ids,
                        struct ofpbuf *ofpacts_p,
-                       struct ovn_desired_flow_table *flow_table)
+                       struct ovn_flow_table *flow_table)
 {
     struct match match;
 
@@ -891,7 +891,7 @@ consider_port_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
                       const struct hmap *local_datapaths,
                       const struct sbrec_port_binding *binding,
                       const struct sbrec_chassis *chassis,
-                      struct ovn_desired_flow_table *flow_table,
+                      struct ovn_flow_table *flow_table,
                       struct ofpbuf *ofpacts_p)
 {
     uint32_t dp_key = binding->datapath->tunnel_key;
@@ -1287,7 +1287,7 @@ consider_mc_group(enum mf_field_id mff_ovn_geneve,
                   const struct hmap *local_datapaths,
                   const struct sbrec_chassis *chassis,
                   const struct sbrec_multicast_group *mc,
-                  struct ovn_desired_flow_table *flow_table)
+                  struct ovn_flow_table *flow_table)
 {
     uint32_t dp_key = mc->datapath->tunnel_key;
     if (!get_local_datapath(local_datapaths, dp_key)) {
@@ -1426,7 +1426,7 @@ update_ofports(struct simap *old, struct simap *new)
 
 void
 physical_handle_port_binding_changes(struct physical_ctx *p_ctx,
-                                     struct ovn_desired_flow_table *flow_table)
+                                     struct ovn_flow_table *flow_table)
 {
     const struct sbrec_port_binding *binding;
     struct ofpbuf ofpacts;
@@ -1452,7 +1452,7 @@ physical_handle_port_binding_changes(struct physical_ctx *p_ctx,
 
 void
 physical_handle_mc_group_changes(struct physical_ctx *p_ctx,
-                                 struct ovn_desired_flow_table *flow_table)
+                                 struct ovn_flow_table *flow_table)
 {
     const struct sbrec_multicast_group *mc;
     SBREC_MULTICAST_GROUP_TABLE_FOR_EACH_TRACKED (mc, p_ctx->mc_group_table) {
@@ -1471,7 +1471,7 @@ physical_handle_mc_group_changes(struct physical_ctx *p_ctx,
 
 void
 physical_run(struct physical_ctx *p_ctx,
-             struct ovn_desired_flow_table *flow_table)
+             struct ovn_flow_table *flow_table)
 {
     if (!hc_uuid) {
         hc_uuid = xmalloc(sizeof(struct uuid));
@@ -1818,7 +1818,7 @@ physical_run(struct physical_ctx *p_ctx,
 
 bool
 physical_handle_ovs_iface_changes(struct physical_ctx *p_ctx,
-                                  struct ovn_desired_flow_table *flow_table)
+                                  struct ovn_flow_table *flow_table)
 {
     const struct ovsrec_interface *iface_rec;
     OVSREC_INTERFACE_TABLE_FOR_EACH_TRACKED (iface_rec, p_ctx->iface_table) {
@@ -1883,7 +1883,7 @@ get_tunnel_ofport(const char *chassis_name, char *encap_ip, ofp_port_t *ofport)
 }
 
 void
-physical_clear_unassoc_flows_with_db(struct ovn_desired_flow_table *flow_table)
+physical_clear_unassoc_flows_with_db(struct ovn_flow_table *flow_table)
 {
     if (hc_uuid) {
         ofctrl_remove_flows(flow_table, hc_uuid);
@@ -1893,7 +1893,7 @@ physical_clear_unassoc_flows_with_db(struct ovn_desired_flow_table *flow_table)
 void
 physical_clear_dp_flows(struct physical_ctx *p_ctx,
                         struct hmapx *ct_updated_datapaths,
-                        struct ovn_desired_flow_table *flow_table)
+                        struct ovn_flow_table *flow_table)
 {
     const struct sbrec_port_binding *binding;
     SBREC_PORT_BINDING_TABLE_FOR_EACH (binding, p_ctx->port_binding_table) {

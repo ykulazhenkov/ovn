@@ -31,28 +31,23 @@ struct ovsrec_bridge;
 struct sbrec_meter_table;
 struct shash;
 
-struct ovn_desired_flow_table {
-    /* Hash map flow table using flow match conditions as hash key.*/
-    struct hmap match_flow_table;
+struct ovn_flow_table;
 
-    /* SB uuid index for the cross reference nodes that link to the nodes in
-     * match_flow_table.*/
-    struct hmap uuid_flow_table;
-
-    /* Is flow changes tracked. */
-    bool change_tracked;
-    /* Tracked flow changes. */
-    struct ovs_list tracked_flows;
-};
+struct ovn_flow_table *ovn_flow_table_alloc(void);
+void ovn_flow_table_clear(struct ovn_flow_table *);
+void ovn_flow_table_destroy(struct ovn_flow_table *);
 
 /* Interface for OVN main loop. */
 void ofctrl_init(struct ovn_extend_table *group_table,
                  struct ovn_extend_table *meter_table,
+                 struct ovn_flow_table *lflow_table,
+                 struct ovn_flow_table *pflow_table,
                  int inactivity_probe_interval);
 void ofctrl_run(const struct ovsrec_bridge *br_int,
                 struct shash *pending_ct_zones);
 enum mf_field_id ofctrl_get_mf_field_id(void);
-void ofctrl_put(struct ovn_desired_flow_table *,
+void ofctrl_put(struct ovn_flow_table *lflow_table,
+                struct ovn_flow_table *pflow_table,
                 struct shash *pending_ct_zones,
                 const struct sbrec_meter_table *,
                 uint64_t nb_cfg,
@@ -69,12 +64,12 @@ char *ofctrl_inject_pkt(const struct ovsrec_bridge *br_int,
                         const struct shash *port_groups);
 
 /* Flow table interfaces to the rest of ovn-controller. */
-void ofctrl_add_flow(struct ovn_desired_flow_table *, uint8_t table_id,
+void ofctrl_add_flow(struct ovn_flow_table *, uint8_t table_id,
                      uint16_t priority, uint64_t cookie,
                      const struct match *, const struct ofpbuf *ofpacts,
                      const struct uuid *);
 
-void ofctrl_add_or_append_flow(struct ovn_desired_flow_table *desired_flows,
+void ofctrl_add_or_append_flow(struct ovn_flow_table *,
                                uint8_t table_id, uint16_t priority,
                                uint64_t cookie, const struct match *match,
                                const struct ofpbuf *actions,
@@ -84,7 +79,7 @@ void ofctrl_add_or_append_flow(struct ovn_desired_flow_table *desired_flows,
  * flows are removed only if they are not referenced by any other sb_uuid(s).
  * For flood-removing all related flows referenced by other sb_uuid(s), use
  * ofctrl_flood_remove_flows(). */
-void ofctrl_remove_flows(struct ovn_desired_flow_table *,
+void ofctrl_remove_flows(struct ovn_flow_table *,
                          const struct uuid *sb_uuid);
 
 /* The function ofctrl_flood_remove_flows flood-removes flows from the desired
@@ -100,15 +95,11 @@ struct ofctrl_flood_remove_node {
     struct hmap_node hmap_node;
     struct uuid sb_uuid;
 };
-void ofctrl_flood_remove_flows(struct ovn_desired_flow_table *,
+void ofctrl_flood_remove_flows(struct ovn_flow_table *,
                                struct hmap *flood_remove_nodes);
 void ofctrl_flood_remove_add_node(struct hmap *flood_remove_nodes,
                                   const struct uuid *sb_uuid);
-void ovn_desired_flow_table_init(struct ovn_desired_flow_table *);
-void ovn_desired_flow_table_clear(struct ovn_desired_flow_table *);
-void ovn_desired_flow_table_destroy(struct ovn_desired_flow_table *);
-
-void ofctrl_check_and_add_flow(struct ovn_desired_flow_table *,
+void ofctrl_check_and_add_flow(struct ovn_flow_table *,
                                uint8_t table_id, uint16_t priority,
                                uint64_t cookie, const struct match *,
                                const struct ofpbuf *ofpacts,
