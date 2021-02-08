@@ -8944,6 +8944,54 @@ build_lrouter_force_snat_flows(struct hmap *lflows, struct ovn_datapath *od,
 }
 
 static void
+build_lrouter_force_snat_flows_op(struct ovn_port *op,
+                                  struct hmap *lflows,
+                                  struct ds *match, struct ds *actions)
+{
+    if (!op->nbrp) {
+        return;
+    }
+
+    bool lb_force_snat_ip =
+            !lport_addresses_is_empty(&op->od->lb_force_snat_addrs);
+    if (!lb_force_snat_ip) {
+        return;
+    }
+
+    if (!op->peer) {
+        return;
+    }
+
+    if (op->lrp_networks.n_ipv4_addrs) {
+        ds_clear(match);
+        ds_clear(actions);
+
+        /* Higher priority rules to force SNAT with the IP addresses
+        * configured in the Gateway router.  This only takes effect
+        * when the packet has already been DNATed or load balanced once. */
+        ds_put_format(match, "flags.force_snat_for_lb == 1 && ip4 && outport == %s",
+                      op->json_key);
+        ds_put_format(actions, "ct_snat(%s);", op->lrp_networks.ipv4_addrs[0].addr_s);
+        ovn_lflow_add(lflows, op->od, S_ROUTER_OUT_SNAT, 110,
+                      ds_cstr(match), ds_cstr(actions));
+    }
+
+    if (op->lrp_networks.n_ipv6_addrs) {
+        ds_clear(match);
+        ds_clear(actions);
+
+        /* Higher priority rules to force SNAT with the IP addresses
+        * configured in the Gateway router.  This only takes effect
+        * when the packet has already been DNATed or load balanced once. */
+        ds_put_format(match, "flags.force_snat_for_lb == 1 && ip6 && outport == %s",
+                      op->json_key);
+        ds_put_format(actions, "ct_snat(%s);", op->lrp_networks.ipv6_addrs[0].addr_s);
+        ovn_lflow_add(lflows, op->od, S_ROUTER_OUT_SNAT, 110,
+                      ds_cstr(match), ds_cstr(actions));
+    }
+}
+
+static void
 build_lrouter_bfd_flows(struct hmap *lflows, struct ovn_port *op)
 {
     if (!op->has_bfd) {
@@ -11278,6 +11326,7 @@ build_lrouter_nat_defrag_and_lb(struct ovn_datapath *od,
                         "dnat");
                 }
             }
+
             if (lb_force_snat_ip) {
                 if (od->lb_force_snat_addrs.n_ipv4_addrs) {
                     build_lrouter_force_snat_flows(lflows, od, "4",
@@ -11490,6 +11539,8 @@ build_lswitch_and_lrouter_iterate_by_op(struct ovn_port *op,
                                             &lsi->match, &lsi->actions);
     build_lrouter_ipv4_ip_input(op, lsi->lflows,
                                 &lsi->match, &lsi->actions);
+    build_lrouter_force_snat_flows_op(op, lsi->lflows, &lsi->match,
+                                      &lsi->actions);
 }
 
 static void
