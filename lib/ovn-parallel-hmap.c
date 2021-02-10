@@ -118,6 +118,10 @@ static void setup_worker_pools(void) {
     }
     if (pool_size > 16) {
         pool_size = 16;
+    } else if (pool_size <= 3) {
+        VLOG_INFO("NUMS : %s : %s : %d : pool size [%d] is <= 3: Forcing to a value of 4",
+                  __FILE__, __FUNCTION__, __LINE__, pool_size);
+        pool_size = 4;
     }
     can_parallelize = (pool_size >= 3);
     fatal_signal_add_hook(worker_pool_hook, NULL, NULL, true);
