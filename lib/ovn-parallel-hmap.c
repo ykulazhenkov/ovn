@@ -110,7 +110,7 @@ struct worker_pool *ovn_add_worker_pool(void *(*start)(void *)){
             &test,
             true)) {
         ovs_mutex_lock(&init_mutex);
-        setup_worker_pools(false);
+        setup_worker_pools(true);
         ovs_mutex_unlock(&init_mutex);
     }
 
