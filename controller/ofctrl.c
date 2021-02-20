@@ -231,6 +231,8 @@ static struct desired_flow *desired_flow_lookup_conjunctive(
     struct ovn_desired_flow_table *,
     const struct ovn_flow *target);
 static void desired_flow_destroy(struct desired_flow *);
+static bool check_sb_uuid_in_flow_references(const struct desired_flow *f,
+                                             const struct uuid *sb_uuid);
 
 static struct installed_flow *installed_flow_lookup(
     const struct ovn_flow *target);
@@ -1076,9 +1078,24 @@ ofctrl_add_or_append_flow(struct ovn_desired_flow_table *desired_flows,
     existing = desired_flow_lookup_conjunctive(desired_flows, &f->flow);
     if (existing) {
         /* There's already a flow with this particular match and action
-         * 'conjunction'. Append the action to that flow rather than
-         * adding a new flow.
-         */
+         * 'conjunction'.  Check that if the desired flow
+         * 'existing->references' has 'struct sb_flow_ref' entry for 'sb_uuid'.
+         * If so, then log a warning and return.  Its possible that
+         * 'ofctrl_add_or_append_flow()' is called twice for the same
+         * 'sb_uuid'. */
+        if (check_sb_uuid_in_flow_references(existing, sb_uuid)) {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+            char *f_str = ovn_flow_to_string(&f->flow);
+            char *existingf_str = ovn_flow_to_string(&existing->flow);
+            VLOG_WARN_RL(&rl, "The existing flow [%s] already has a reference "
+                         "for SB UUID : "UUID_FMT". Ignoring the flow [%s]",
+                         existingf_str, UUID_ARGS(sb_uuid), f_str);
+            free(f_str);
+            free(existingf_str);
+            return;
+        }
+
+        /* Append the action to that flow rather than adding a new flow. */
         uint64_t compound_stub[64 / 8];
         struct ofpbuf compound;
         ofpbuf_use_stub(&compound, compound_stub, sizeof(compound_stub));
@@ -1372,18 +1389,25 @@ desired_flow_lookup(struct ovn_desired_flow_table *flow_table,
 }
 
 static bool
-flow_lookup_match_uuid_cb(const struct desired_flow *candidate,
-                          const void *arg)
+check_sb_uuid_in_flow_references(const struct desired_flow *f,
+                                 const struct uuid *sb_uuid)
 {
-    const struct uuid *sb_uuid = arg;
     struct sb_flow_ref *sfr;
 
-    LIST_FOR_EACH (sfr, sb_list, &candidate->references) {
+    LIST_FOR_EACH (sfr, sb_list, &f->references) {
         if (uuid_equals(sb_uuid, &sfr->sb_uuid)) {
             return true;
         }
     }
     return false;
+}
+
+static bool
+flow_lookup_match_uuid_cb(const struct desired_flow *candidate,
+                          const void *arg)
+{
+    const struct uuid *sb_uuid = arg;
+    return check_sb_uuid_in_flow_references(candidate, sb_uuid);
 }
 
 /* Finds and returns a desired_flow in 'flow_table' whose key is identical to
