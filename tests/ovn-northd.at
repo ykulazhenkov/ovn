@@ -2727,10 +2727,16 @@ check ovn-nbctl lsp-set-type public-lr0 router
 check ovn-nbctl lsp-set-addresses public-lr0 router
 check ovn-nbctl lsp-set-options public-lr0 router-port=lr0-public
 
+check ovn-nbctl lb-add lb1 10.0.0.10:80 10.0.0.4:8080
+check ovn-nbctl lr-lb-add lr0 lb1
 check ovn-nbctl set logical_router lr0 options:chassis=ch1
 
 ovn-sbctl dump-flows lr0 > lr0flows
 AT_CAPTURE_FILE([lr0flows])
+
+AT_CHECK([grep "lr_in_dnat" lr0flows | grep force_snat_for_lb | sort], [0], [dnl
+])
+
 
 AT_CHECK([grep "lr_out_snat" lr0flows | grep force_snat_for_lb | sort], [0], [dnl
 ])
@@ -2739,6 +2745,11 @@ check ovn-nbctl --wait=sb set logical_router lr0 options:lb_force_snat_ip="20.0.
 
 ovn-sbctl dump-flows lr0 > lr0flows
 AT_CAPTURE_FILE([lr0flows])
+
+AT_CHECK([grep "lr_in_dnat" lr0flows | grep force_snat_for_lb | sort], [0], [dnl
+  table=6 (lr_in_dnat         ), priority=120  , match=(ct.est && ip && ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80), action=(flags.force_snat_for_lb = 1; ct_dnat;)
+  table=6 (lr_in_dnat         ), priority=120  , match=(ct.new && ip && ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80), action=(flags.force_snat_for_lb = 1; ct_lb(backends=10.0.0.4:8080);)
+])
 
 AT_CHECK([grep "lr_out_snat" lr0flows | grep force_snat_for_lb | sort], [0], [dnl
   table=1 (lr_out_snat        ), priority=100  , match=(flags.force_snat_for_lb == 1 && ip4), action=(ct_snat(20.0.0.4);)
@@ -2749,6 +2760,14 @@ check ovn-nbctl --wait=sb set logical_router lr0 options:lb_force_snat_ip="route
 
 ovn-sbctl dump-flows lr0 > lr0flows
 AT_CAPTURE_FILE([lr0flows])
+
+AT_CHECK([grep "lr_in_ip_input" lr0flows | grep "priority=60" | sort], [0], [dnl
+])
+
+AT_CHECK([grep "lr_in_dnat" lr0flows | grep force_snat_for_lb | sort], [0], [dnl
+  table=6 (lr_in_dnat         ), priority=120  , match=(ct.est && ip && ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80), action=(flags.force_snat_for_lb = 1; ct_dnat;)
+  table=6 (lr_in_dnat         ), priority=120  , match=(ct.new && ip && ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80), action=(flags.force_snat_for_lb = 1; ct_lb(backends=10.0.0.4:8080);)
+])
 
 AT_CHECK([grep "lr_out_snat" lr0flows | grep force_snat_for_lb | sort], [0], [dnl
   table=1 (lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-public"), action=(ct_snat(172.168.0.100);)
@@ -2769,6 +2788,11 @@ check ovn-nbctl --wait=sb add logical_router_port lr0-sw1 networks "bef0\:\:1/64
 
 ovn-sbctl dump-flows lr0 > lr0flows
 AT_CAPTURE_FILE([lr0flows])
+
+AT_CHECK([grep "lr_in_dnat" lr0flows | grep force_snat_for_lb | sort], [0], [dnl
+  table=6 (lr_in_dnat         ), priority=120  , match=(ct.est && ip && ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80), action=(flags.force_snat_for_lb = 1; ct_dnat;)
+  table=6 (lr_in_dnat         ), priority=120  , match=(ct.new && ip && ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80), action=(flags.force_snat_for_lb = 1; ct_lb(backends=10.0.0.4:8080);)
+])
 
 AT_CHECK([grep "lr_out_snat" lr0flows | grep force_snat_for_lb | sort], [0], [dnl
   table=1 (lr_out_snat        ), priority=110  , match=(flags.force_snat_for_lb == 1 && ip4 && outport == "lr0-public"), action=(ct_snat(172.168.0.100);)
