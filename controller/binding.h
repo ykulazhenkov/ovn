@@ -56,7 +56,7 @@ struct binding_ctx_in {
 
 struct binding_ctx_out {
     struct hmap *local_datapaths;
-    struct shash *local_bindings;
+    struct local_binding_data *lbinding_data;
 
     /* sset of (potential) local lports. */
     struct sset *local_lports;
@@ -86,28 +86,16 @@ struct binding_ctx_out {
     struct hmap *tracked_dp_bindings;
 };
 
-enum local_binding_type {
-    BT_VIF,
-    BT_CONTAINER,
-    BT_VIRTUAL
+struct local_binding_data {
+    struct shash local_bindings;
+    struct shash binding_lports;
 };
 
-struct local_binding {
-    char *name;
-    enum local_binding_type type;
-    const struct ovsrec_interface *iface;
-    const struct sbrec_port_binding *pb;
+void local_binding_data_init(struct local_binding_data *);
+void local_binding_data_destroy(struct local_binding_data *);
 
-    /* shash of 'struct local_binding' representing children. */
-    struct shash children;
-    struct local_binding *parent;
-};
-
-static inline struct local_binding *
-local_binding_find(struct shash *local_bindings, const char *name)
-{
-    return shash_find_data(local_bindings, name);
-}
+const struct sbrec_port_binding *local_binding_get_primary_pb(
+    struct shash *local_bindings, const char *name);
 
 /* Represents a tracked binding logical port. */
 struct tracked_binding_lport {
@@ -137,7 +125,7 @@ bool binding_handle_port_binding_changes(struct binding_ctx_in *,
 void binding_tracked_dp_destroy(struct hmap *tracked_datapaths);
 
 void binding_init(void);
-void binding_seqno_run(struct shash *local_bindings);
-void binding_seqno_install(struct shash *local_bindings);
+void binding_seqno_run(struct local_binding_data *lbinding_data);
+void binding_seqno_install(struct local_binding_data *lbinding_data);
 void binding_seqno_flush(void);
 #endif /* controller/binding.h */
