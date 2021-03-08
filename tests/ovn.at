@@ -25149,3 +25149,80 @@ AT_CHECK([cat hv2_offlows_table72.txt | grep -v NXST], [1], [dnl
 OVN_CLEANUP([hv1], [hv2])
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- container port changed to normal port and then deleted])
+ovn_start
+
+net_add n1
+
+sim_add hv1
+as hv1
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+ovs-vsctl -- add-port br-int vm1
+
+check ovn-nbctl ls-add ls
+check ovn-nbctl lsp-add ls vm1
+check ovn-nbctl lsp-add ls vm-cont vm1 1
+check as hv1 ovs-vsctl set Interface vm1 external_ids:iface-id=vm1
+
+wait_for_ports_up
+
+check as hv1 ovn-appctl -t ovn-controller debug/pause
+check ovn-nbctl clear logical_switch_port vm-cont parent_name
+check as hv1 ovs-vsctl set Interface vm1 external_ids:iface-id=foo
+check ovn-nbctl lsp-del vm-cont
+check as hv1 ovn-appctl -t ovn-controller debug/resume
+
+ovn-nbctl --wait=hv sync
+
+# Make sure that ovn-controller has not asserted.
+AT_CHECK([kill -0 $(cat hv1/ovn-controller.pid)])
+
+wait_column "false" nb:Logical_Switch_Port up name=vm1
+
+OVN_CLEANUP([hv1])
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- container port use-after-free test])
+ovn_start
+
+net_add n1
+
+sim_add hv1
+as hv1
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+ovs-vsctl -- add-port br-int vm1
+
+check ovn-nbctl ls-add ls
+check ovn-nbctl lsp-add ls vm1
+check ovn-nbctl lsp-add ls vm-cont vm1 1
+check ovs-vsctl set Interface vm1 external_ids:iface-id=vm1
+check ovn-nbctl clear logical_switch_port vm-cont parent_name
+check ovs-vsctl set Interface vm1 external_ids:iface-id=foo
+check ovn-nbctl lsp-del vm-cont
+check ovn-nbctl ls-del ls
+check ovn-nbctl ls-add ls
+check ovn-nbctl lsp-add ls vm1
+check ovn-nbctl lsp-add ls vm-cont vm1 1
+check ovs-vsctl set Interface vm1 external_ids:iface-id=vm1
+check as hv1 ovn-appctl -t ovn-controller debug/pause
+check ovn-nbctl clear logical_switch_port vm-cont parent_name
+check ovn-nbctl lsp-del vm-cont
+check as hv1 ovn-appctl -t ovn-controller debug/resume
+check as hv1 ovs-vsctl set Interface vm1 external_ids:iface-id=foo
+
+ovn-nbctl --wait=hv sync
+
+# Make sure that ovn-controller has not asserted.
+AT_CHECK([kill -0 $(cat hv1/ovn-controller.pid)])
+
+wait_column "false" nb:Logical_Switch_Port up name=vm1
+
+OVN_CLEANUP([hv1])
+AT_CLEANUP
+])
