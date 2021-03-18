@@ -227,6 +227,17 @@
         </p>
       </column>
 
+      <column name="options" key="use_ct_inv_match">
+        <p>
+          If set to false, <code>ovn-northd</code> will not use the
+          <code>ct.inv</code> field in any of the logical flow matches.
+          The default value is true.  CMS can consider setting this to
+          false, in case the NIC doesn't support offloading OVS datapath
+          flows with the match  <code>+inv</code> or <code>-inv</code> on
+          <code>ct_state</code> field.
+        </p>
+      </column>
+
       <group title="Options for configuring interconnection route advertisement">
         <p>
           These options control how routes are advertised between OVN
