@@ -143,7 +143,8 @@ struct worker_pool *ovn_add_worker_pool(void *(*start)(void *)){
         }
 
         for (i = 0; i < pool_size; i++) {
-            ovs_thread_create("worker pool helper", start, &new_pool->controls[i]);
+            new_pool->controls[i].worker =
+                ovs_thread_create("worker pool helper", start, &new_pool->controls[i]);
         }
         ovs_list_push_back(&worker_pools, &new_pool->list_node);
     }
@@ -385,6 +386,9 @@ static void worker_pool_hook(void *aux OVS_UNUSED) {
     LIST_FOR_EACH (pool, list_node, &worker_pools) {
         for (i = 0; i < pool->size ; i++) {
             sem_post(pool->controls[i].fire);
+        }
+        for (i = 0; i < pool->size ; i++) {
+            pthread_join(pool->controls[i].worker, NULL);
         }
         for (i = 0; i < pool->size ; i++) {
             sem_close(pool->controls[i].fire);
