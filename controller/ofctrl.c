@@ -1931,11 +1931,29 @@ merge_tracked_flows(struct ovn_desired_flow_table *flow_table)
                 continue;
             }
 
-            /* del_f must have been installed, otherwise it should have been
-             * removed during track_flow_add_or_modify. */
-            ovs_assert(del_f->installed_flow);
+            if (!del_f->installed_flow) {
+                /* del_f must have been installed, otherwise it should have
+                 * been removed during track_flow_add_or_modify.
+                 *
+                 * But however there are a couple of scenarios this may not
+                 * happen.
+                 *
+                 * Scenario 1:  A flow was added to the desired flows, but
+                 *              ofctrl_put() couldn't install the flow and
+                 *              an SB update caused the 'del_f' to be removed
+                 *              and re-added as 'f'.
+                 *
+                 * Scenario 2:  In a  single engine run, a flow 'del_f' was
+                 *              added to the desired flow, removed from the
+                 *              desired flow and re-added as 'f'.  This could
+                 *              happen after the commit c6c61b4e3462.
+                 *
+                 * Treat both the scenarios as valid scenarios and just remove
+                 * 'del_f' from the hmap - deleted_flows.
+                 * update_installed_flows_by_track() will install 'f'.
+                 */
 
-            if (!f->installed_flow) {
+            } else if (!f->installed_flow) {
                 /* f is not installed yet. */
                 replace_installed_to_desired(del_f->installed_flow, del_f, f);
             } else {
