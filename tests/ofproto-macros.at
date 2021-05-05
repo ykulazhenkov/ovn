@@ -268,6 +268,10 @@ check_logs () {
     # we ignore the messages that were rate-limited, we can end up failing just
     # because of the announcement that rate-limiting happened (and in a racy,
     # timing-dependent way, too).
+	#
+	# "transaction error" messages are currently being ignored. This is because
+	# it is possible to insert the same record twice before the server has notified
+	# a client that the first record was inserted.
     sed -n "$1
 /reset by peer/d
 /Broken pipe/d
@@ -278,6 +282,7 @@ check_logs () {
 /timeval.*context switches: [[0-9]]* voluntary, [[0-9]]* involuntary/d
 /ovs_rcu.*blocked [[0-9]]* ms waiting for .* to quiesce/d
 /Dropped [[0-9]]* log messages/d
+/transaction error/d
 /|WARN|/p
 /|ERR|/p
 /|EMER|/p" ${logs}
