@@ -187,8 +187,8 @@ enum ovn_stage {
     PIPELINE_STAGE(ROUTER, IN,  LOOKUP_NEIGHBOR, 1, "lr_in_lookup_neighbor") \
     PIPELINE_STAGE(ROUTER, IN,  LEARN_NEIGHBOR,  2, "lr_in_learn_neighbor") \
     PIPELINE_STAGE(ROUTER, IN,  IP_INPUT,        3, "lr_in_ip_input")     \
-    PIPELINE_STAGE(ROUTER, IN,  DEFRAG,          4, "lr_in_defrag")       \
-    PIPELINE_STAGE(ROUTER, IN,  UNSNAT,          5, "lr_in_unsnat")       \
+    PIPELINE_STAGE(ROUTER, IN,  UNSNAT,          4, "lr_in_unsnat")       \
+    PIPELINE_STAGE(ROUTER, IN,  DEFRAG,          5, "lr_in_defrag")       \
     PIPELINE_STAGE(ROUTER, IN,  DNAT,            6, "lr_in_dnat")         \
     PIPELINE_STAGE(ROUTER, IN,  ECMP_STATEFUL,   7, "lr_in_ecmp_stateful") \
     PIPELINE_STAGE(ROUTER, IN,  ND_RA_OPTIONS,   8, "lr_in_nd_ra_options") \
@@ -8719,20 +8719,33 @@ add_router_lb_flow(struct hmap *lflows, struct ovn_datapath *od,
     }
 
     /* A match and actions for established connections. */
-    char *est_match = xasprintf("ct.est && %s", ds_cstr(match));
+    struct ds est_match = DS_EMPTY_INITIALIZER;
+    ds_put_format(&est_match,
+                  "ct.est && ip && %sreg0 == %s && ct_label.natted == 1",
+                  IN6_IS_ADDR_V4MAPPED(&lb_vip->vip) ? "" : "xx",
+                  lb_vip->vip_str);
+    if (lb_vip->vip_port) {
+        ds_put_format(&est_match, " && %s", proto);
+    }
+    if (od->l3redirect_port &&
+        (lb_vip->n_backends || !lb_vip->empty_backend_rej)) {
+        ds_put_format(&est_match, " && is_chassis_resident(%s)",
+                      od->l3redirect_port->json_key);
+    }
     if (snat_type == FORCE_SNAT || snat_type == SKIP_SNAT) {
-        char *est_actions = xasprintf("flags.%s_snat_for_lb = 1; ct_dnat;",
+        char *est_actions = xasprintf("flags.%s_snat_for_lb = 1; next;",
                 snat_type == SKIP_SNAT ? "skip" : "force");
         ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DNAT, priority,
-                                est_match, est_actions, &lb->header_);
+                                ds_cstr(&est_match), est_actions,
+                                &lb->header_);
         free(est_actions);
     } else {
         ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DNAT, priority,
-                                est_match, "ct_dnat;", &lb->header_);
+                                ds_cstr(&est_match), "next;", &lb->header_);
     }
 
     free(new_match);
-    free(est_match);
+    ds_destroy(&est_match);
 
     const char *ip_match = NULL;
     if (IN6_IS_ADDR_V4MAPPED(&lb_vip->vip)) {
@@ -8817,8 +8830,8 @@ add_router_lb_flow(struct hmap *lflows, struct ovn_datapath *od,
 static void
 build_lrouter_lb_flows(struct hmap *lflows, struct ovn_datapath *od,
                        struct hmap *lbs, struct shash *meter_groups,
-                       struct sset *nat_entries, struct ds *match,
-                       struct ds *actions)
+                       struct sset *nat_entries,
+                       struct ds *match, struct ds *actions)
 {
     /* A set to hold all ips that need defragmentation and tracking. */
     struct sset all_ips = SSET_INITIALIZER(&all_ips);
@@ -8840,10 +8853,17 @@ build_lrouter_lb_flows(struct hmap *lflows, struct ovn_datapath *od,
         for (size_t j = 0; j < lb->n_vips; j++) {
             struct ovn_lb_vip *lb_vip = &lb->vips[j];
             struct ovn_northd_lb_vip *lb_vip_nb = &lb->vips_nb[j];
+
+            bool is_udp = nullable_string_is_equal(nb_lb->protocol, "udp");
+            bool is_sctp = nullable_string_is_equal(nb_lb->protocol,
+                                                    "sctp");
+            const char *proto = is_udp ? "udp" : is_sctp ? "sctp" : "tcp";
+
             ds_clear(actions);
             build_lb_vip_actions(lb_vip, lb_vip_nb, actions,
                                  lb->selection_fields, false);
 
+            struct ds defrag_actions = DS_EMPTY_INITIALIZER;
             if (!sset_contains(&all_ips, lb_vip->vip_str)) {
                 sset_add(&all_ips, lb_vip->vip_str);
                 /* If there are any load balancing rules, we should send
@@ -8855,17 +8875,28 @@ build_lrouter_lb_flows(struct hmap *lflows, struct ovn_datapath *od,
                  * 2. If there are L4 ports in load balancing rules, we
                  *    need the defragmentation to match on L4 ports. */
                 ds_clear(match);
+                ds_clear(&defrag_actions);
                 if (IN6_IS_ADDR_V4MAPPED(&lb_vip->vip)) {
                     ds_put_format(match, "ip && ip4.dst == %s",
+                                  lb_vip->vip_str);
+                    ds_put_format(&defrag_actions, "reg0 = %s; ct_dnat;",
                                   lb_vip->vip_str);
                 } else {
                     ds_put_format(match, "ip && ip6.dst == %s",
                                   lb_vip->vip_str);
+                    ds_put_format(&defrag_actions, "xxreg0 = %s; ct_dnat;",
+                                  lb_vip->vip_str);
+                }
+
+                if (lb_vip->vip_port) {
+                    ds_put_format(match, " && %s", proto);
                 }
                 ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_DEFRAG,
-                                        100, ds_cstr(match), "ct_next;",
+                                        100, ds_cstr(match),
+                                        ds_cstr(&defrag_actions),
                                         &nb_lb->header_);
             }
+            ds_destroy(&defrag_actions);
 
             /* Higher priority rules are added for load-balancing in DNAT
              * table.  For every match (on a VIP[:port]), we add two flows
@@ -8874,18 +8905,14 @@ build_lrouter_lb_flows(struct hmap *lflows, struct ovn_datapath *od,
              * flow is for ct.est with an action of "ct_dnat;". */
             ds_clear(match);
             if (IN6_IS_ADDR_V4MAPPED(&lb_vip->vip)) {
-                ds_put_format(match, "ip && ip4.dst == %s",
+                ds_put_format(match, "ip && reg0 == %s",
                               lb_vip->vip_str);
             } else {
-                ds_put_format(match, "ip && ip6.dst == %s",
+                ds_put_format(match, "ip && xxreg0 == %s",
                               lb_vip->vip_str);
             }
 
             int prio = 110;
-            bool is_udp = nullable_string_is_equal(nb_lb->protocol, "udp");
-            bool is_sctp = nullable_string_is_equal(nb_lb->protocol,
-                                                    "sctp");
-            const char *proto = is_udp ? "udp" : is_sctp ? "sctp" : "tcp";
 
             if (lb_vip->vip_port) {
                 ds_put_format(match, " && %s && %s.dst == %d", proto,

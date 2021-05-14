@@ -2197,11 +2197,12 @@ tcp,orig=(src=172.16.1.2,dst=30.0.0.2,sport=<cleared>,dport=<cleared>),reply=(sr
 ])
 
 check_est_flows () {
-    n=$(ovs-ofctl dump-flows br-int table=15 | grep \
-"priority=120,ct_state=+est+trk,tcp,metadata=0x2,nw_dst=30.0.0.2,tp_dst=8000" \
-| grep nat | sed -n 's/.*n_packets=\([[0-9]]\{1,\}\).*/\1/p')
+    n=$(ovs-ofctl dump-flows br-int table=13 | grep \
+"priority=100,tcp,metadata=0x2,nw_dst=30.0.0.2" | grep nat |
+sed -n 's/.*n_packets=\([[0-9]]\{1,\}\).*/\1/p')
 
     echo "n_packets=$n"
+    test ! -z $n
     test "$n" != 0
 }
 
