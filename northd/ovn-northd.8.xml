@@ -2599,39 +2599,7 @@ icmp6 {
       </li>
     </ul>
 
-    <h3>Ingress Table 4: DEFRAG</h3>
-
-    <p>
-      This is to send packets to connection tracker for tracking and
-      defragmentation.  It contains a priority-0 flow that simply moves traffic
-      to the next table.
-    </p>
-
-    <p>
-      If load balancing rules with virtual IP addresses (and ports) are
-      configured in <code>OVN_Northbound</code> database for a Gateway router,
-      a priority-100 flow is added for each configured virtual IP address
-      <var>VIP</var>. For IPv4 <var>VIPs</var> the flow matches <code>ip
-      &amp;&amp; ip4.dst == <var>VIP</var></code>.  For IPv6 <var>VIPs</var>,
-      the flow matches <code>ip &amp;&amp; ip6.dst == <var>VIP</var></code>.
-      The flow uses the action <code>ct_next;</code> to send IP packets to the
-      connection tracker for packet de-fragmentation and tracking before
-      sending it to the next table.
-    </p>
-
-    <p>
-      If ECMP routes with symmetric reply are configured in the
-      <code>OVN_Northbound</code> database for a gateway router, a priority-100
-      flow is added for each router port on which symmetric replies are
-      configured. The matching logic for these ports essentially reverses the
-      configured logic of the ECMP route. So for instance, a route with a
-      destination routing policy will instead match if the source IP address
-      matches the static route's prefix. The flow uses the action
-      <code>ct_next</code> to send IP packets to the connection tracker for
-      packet de-fragmentation and tracking before sending it to the next table.
-    </p>
-
-    <h3>Ingress Table 5: UNSNAT</h3>
+    <h3>Ingress Table 4: UNSNAT</h3>
 
     <p>
       This is for already established connections' reverse traffic.
@@ -2640,7 +2608,7 @@ icmp6 {
       unSNATted here.
     </p>
 
-    <p>Ingress Table 5: UNSNAT on Gateway and Distributed Routers</p>
+    <p>Ingress Table 4: UNSNAT on Gateway and Distributed Routers</p>
     <ul>
       <li>
         <p>
@@ -2667,7 +2635,7 @@ icmp6 {
       </li>
     </ul>
 
-    <p>Ingress Table 5: UNSNAT on Gateway Routers</p>
+    <p>Ingress Table 4: UNSNAT on Gateway Routers</p>
 
     <ul>
       <li>
@@ -2684,9 +2652,10 @@ icmp6 {
           <code>lb_force_snat_ip=router_ip</code> then for every logical router
           port <var>P</var> attached to the Gateway router with the router ip
           <var>B</var>, a priority-110 flow is added with the match
-          <code>inport == <var>P</var> &amp;&amp; ip4.dst == <var>B</var></code> or
-          <code>inport == <var>P</var> &amp;&amp; ip6.dst == <var>B</var></code>
-          with an action <code>ct_snat; </code>.
+          <code>inport == <var>P</var> &amp;&amp;
+          ip4.dst == <var>B</var></code> or <code>inport == <var>P</var>
+          &amp;&amp; ip6.dst == <var>B</var></code> with an action
+          <code>ct_snat; </code>.
         </p>
 
         <p>
@@ -2716,7 +2685,7 @@ icmp6 {
       </li>
     </ul>
 
-    <p>Ingress Table 5: UNSNAT on Distributed Routers</p>
+    <p>Ingress Table 4: UNSNAT on Distributed Routers</p>
 
     <ul>
       <li>
@@ -2746,6 +2715,40 @@ icmp6 {
         </p>
       </li>
     </ul>
+
+    <h3>Ingress Table 5: DEFRAG</h3>
+
+    <p>
+      This is to send packets to connection tracker for tracking and
+      defragmentation.  It contains a priority-0 flow that simply moves traffic
+      to the next table.
+    </p>
+
+    <p>
+      If load balancing rules with virtual IP addresses (and ports) are
+      configured in <code>OVN_Northbound</code> database for a Gateway router,
+      a priority-100 flow is added for each configured virtual IP address
+      <var>VIP</var>. For IPv4 <var>VIPs</var> the flow matches <code>ip
+      &amp;&amp; ip4.dst == <var>VIP</var></code>.  For IPv6 <var>VIPs</var>,
+      the flow matches <code>ip &amp;&amp; ip6.dst == <var>VIP</var></code>.
+      The flow applies the action <code>reg0 = <var>VIP</var>
+      &amp;&amp; ct_dnat;</code> to send IP packets to the
+      connection tracker for packet de-fragmentation and to dnat the
+      destination IP for the committed connection before sending it to the
+      next table.
+    </p>
+
+    <p>
+      If ECMP routes with symmetric reply are configured in the
+      <code>OVN_Northbound</code> database for a gateway router, a priority-100
+      flow is added for each router port on which symmetric replies are
+      configured. The matching logic for these ports essentially reverses the
+      configured logic of the ECMP route. So for instance, a route with a
+      destination routing policy will instead match if the source IP address
+      matches the static route's prefix. The flow uses the action
+      <code>ct_next</code> to send IP packets to the connection tracker for
+      packet de-fragmentation and tracking before sending it to the next table.
+    </p>
 
     <h3>Ingress Table 6: DNAT</h3>
 
@@ -2799,19 +2802,28 @@ icmp6 {
       </li>
 
       <li>
-        For all the configured load balancing rules for a router in
-        <code>OVN_Northbound</code> database that includes a L4 port
-        <var>PORT</var> of protocol <var>P</var> and IPv4 or IPv6 address
-        <var>VIP</var>, a priority-120 flow that matches on
-        <code>ct.est &amp;&amp; ip &amp;&amp; ip4.dst == <var>VIP</var>
-        &amp;&amp; <var>P</var> &amp;&amp; <var>P</var>.dst == <var>PORT
-        </var></code> (<code>ip6.dst == <var>VIP</var></code> in the IPv6 case)
-        with an action of <code>ct_dnat;</code>. If the router is
-        configured to force SNAT any load-balanced packets, the above action
-        will be replaced by <code>flags.force_snat_for_lb = 1; ct_dnat;</code>.
-        If the load balancing rule is configured with <code>skip_snat</code>
-        set to true, the above action will be replaced by
-        <code>flags.skip_snat_for_lb = 1; ct_dnat;</code>.
+        <p>
+          For all the configured load balancing rules for a router in
+          <code>OVN_Northbound</code> database that includes a L4 port
+          <var>PORT</var> of protocol <var>P</var> and IPv4 or IPv6 address
+          <var>VIP</var>, a priority-120 flow that matches on
+          <code>ct.est &amp;&amp; ip &amp;&amp; reg0 == <var>VIP</var>
+          &amp;&amp; <var>P</var> &amp;&amp; <var>P</var>.dst == <var>PORT
+          </var></code> (<code>xxreg0 == <var>VIP</var></code> in the
+          IPv6 case) with an action of <code>next;</code>. If the router is
+          configured to force SNAT any load-balanced packets, the above action
+          will be replaced by <code>flags.force_snat_for_lb = 1; next;</code>.
+          If the load balancing rule is configured with <code>skip_snat</code>
+          set to true, the above action will be replaced by
+          <code>flags.skip_snat_for_lb = 1; next;</code>.
+        </p>
+
+        <p>
+          Previous table <code>lr_in_defrag</code> sets the register
+          <code>reg0</code> (or <code>xxreg0</code> for IPv6) and does
+          <code>ct_dnat</code>.  Hence for established traffic, this
+          table just advances the packet to the next stage.
+        </p>
       </li>
 
       <li>
@@ -2863,8 +2875,8 @@ icmp6 {
         For each configuration in the OVN Northbound database, that asks
         to change the destination IP address of a packet from <var>A</var> to
         <var>B</var>, a priority-100 flow matches <code>ip &amp;&amp;
-        ip4.dst == <var>A</var></code> or <code>ip &amp;&amp;
-        ip6.dst == <var>A</var></code> with an action
+        reg0 == <var>A</var></code> or <code>ip &amp;&amp;
+        xxreg0 == <var>A</var></code> with an action
         <code>flags.loopback = 1; ct_dnat(<var>B</var>);</code>.  If the
         Gateway router is configured to force SNAT any DNATed packet,
         the above action will be replaced by
@@ -2890,6 +2902,10 @@ icmp6 {
           <code>exempted_ext_ips</code>.
         </p>
 
+        <p>
+          The previous table <code>lr_in_defrag</code> sets the register
+          <code>reg0</code> (or <code>xxreg0</code>) with <code>A</code>.
+        </p>
       </li>
 
       <li>
