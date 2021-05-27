@@ -5575,7 +5575,8 @@ for (rp in &RouterPort(.router = &Router{._uuid = lr_uuid, .options = lr_options
 for (r in &Router(._uuid = lr_uuid,
                   .l3dgw_port = l3dgw_port,
                   .redirect_port_name = redirect_port_name,
-                  .is_gateway = is_gateway)
+                  .is_gateway = is_gateway,
+                  .undnat_without_src_check = undnat_without_src_check)
      if l3dgw_port.is_some() or is_gateway)
 {
     for (LogicalRouterNAT(.lr = lr_uuid, .nat = nat)) {
@@ -5966,21 +5967,23 @@ for (r in &Router(._uuid = lr_uuid,
                                     .ips = lb_force_snat_ips,
                                     .context = "lb");
 
-        /* For gateway router, re-circulate every packet through
-        * the DNAT zone.  This helps with the following.
-        *
-        * Any packet that needs to be unDNATed in the reverse
-        * direction gets unDNATed. Ideally this could be done in
-        * the egress pipeline. But since the gateway router
-        * does not have any feature that depends on the source
-        * ip address being external IP address for IP routing,
-        * we can do it here, saving a future re-circulation. */
-        Flow(.logical_datapath = lr_uuid,
-             .stage            = s_ROUTER_IN_DNAT(),
-             .priority         = 50,
-             .__match          = "ip",
-             .actions          = "flags.loopback = 1; ct_dnat;",
-             .external_ids     = map_empty())
+        if (undnat_without_src_check) {
+            /* For gateway router, re-circulate every packet through
+            * the DNAT zone.  This helps with the following.
+            *
+            * Any packet that needs to be unDNATed in the reverse
+            * direction gets unDNATed. Ideally this could be done in
+            * the egress pipeline. But since the gateway router
+            * does not have any feature that depends on the source
+            * ip address being external IP address for IP routing,
+            * we can do it here, saving a future re-circulation. */
+            Flow(.logical_datapath = lr_uuid,
+                .stage            = s_ROUTER_IN_DNAT(),
+                .priority         = 50,
+                .__match          = "ip",
+                .actions          = "flags.loopback = 1; ct_dnat;",
+                .external_ids     = map_empty())
+        }
     }
 }
 
@@ -6131,6 +6134,7 @@ for (RouterLBVIP(
              * the router egress pipleine stage - S_ROUTER_OUT_UNDNAT if the logical
              * router has a gateway router port associated.
              */
+            var undnat_pri = if (port != 0) { 130 } else { 120 } in
             var conds = {
                 var conds = vec_empty();
                 for (ip_str in string_split(backends, ",")) {
@@ -6160,7 +6164,7 @@ for (RouterLBVIP(
                 } in
             Flow(.logical_datapath = lr_uuid,
                  .stage            = s_ROUTER_OUT_UNDNAT(),
-                 .priority         = 120,
+                 .priority         = undnat_pri,
                  .__match          = undnat_match,
                  .actions          = action,
                  .external_ids     = stage_hint(lb._uuid))
