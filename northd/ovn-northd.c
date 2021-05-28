@@ -947,7 +947,7 @@ lrouter_is_enabled(const struct nbrec_logical_router *lrouter)
 static bool
 lrouter_undnat_without_src_check(const struct nbrec_logical_router *nbr)
 {
-    return smap_get_bool(&nbr->options, "undnat_without_src_check", true);
+    return smap_get_bool(&nbr->options, "undnat_without_src_check", false);
 }
 
 static void
